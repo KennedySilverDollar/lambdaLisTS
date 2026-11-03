@@ -1,0 +1,179 @@
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
+
+fn fixture_path(name: &str) -> String {
+    format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn lists_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_lists")
+}
+
+fn run_lists(args: &[&str], stdin_data: Option<&str>) -> Output {
+    let mut cmd = Command::new(lists_bin());
+    cmd.args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match stdin_data {
+        Some(_) => {
+            cmd.stdin(Stdio::piped());
+        }
+        None => {
+            cmd.stdin(Stdio::null());
+        }
+    }
+    let mut child = cmd.spawn().expect("lists を起動できること");
+    if let Some(input) = stdin_data {
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(input.as_bytes())
+            .expect("write stdin");
+    }
+    child.wait_with_output().expect("wait")
+}
+
+fn temp_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("lists-m9-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir
+}
+
+fn assert_golden_json(label: &str, actual: serde_json::Value) {
+    let path = format!("{}/tests/golden/{label}", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var("UPDATE_SNAPSHOTS").is_ok() {
+        let pretty = serde_json::to_string_pretty(&actual).expect("pretty");
+        std::fs::write(&path, format!("{pretty}\n")).expect("write golden");
+    }
+    let content = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("golden がありません: {path} (UPDATE_SNAPSHOTS=1 cargo test で生成)"));
+    let expected: serde_json::Value = serde_json::from_str(&content).expect("golden json");
+    assert_eq!(actual, expected, "{path}");
+}
+
+#[test]
+fn repl_json_lines_golden() {
+    let cart = fixture_path("cart.lts");
+    let input = format!(
+        "{{\"id\": 1, \"op\": \"eval\", \"src\": \"(defn add (a : number) (b : number) : number (+ a b))\"}}\n\
+         {{\"id\": 2, \"op\": \"test\"}}\n\
+         {{\"id\": 3, \"op\": \"prop\", \"name\": \"add-money commutative\"}}\n\
+         {{\"id\": 4, \"op\": \"reload\", \"file\": {}}}\n\
+         {{\"id\": 5, \"op\": \"type-of\", \"src\": \"add\"}}\n\
+         {{\"id\": 6, \"op\": \"type-of\", \"src\": \"place-order\"}}\n\
+         {{\"id\": 7, \"op\": \"test\"}}\n\
+         {{\"id\": 8, \"op\": \"eval\", \"src\": \"(defn f () : number (ok \\\"a\\\"))\"}}\n\
+         {{\"id\": 9, \"op\": \"quit\"}}\n",
+        serde_json::to_string(&cart).expect("json")
+    );
+    let out = run_lists(&["repl"], Some(&input));
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let responses: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("1行1JSON"))
+        .collect();
+    assert_eq!(responses.len(), 8, "quit は応答しない: {stdout}");
+
+    assert_eq!(
+        responses[0],
+        serde_json::json!({"id": 1, "ok": true, "defined": "add", "type": "(fn (number number) : number)"})
+    );
+    assert_eq!(
+        responses[1],
+        serde_json::json!({"id": 2, "ok": true, "results": []})
+    );
+    assert_eq!(
+        responses[2]["errors"][0]["kind"],
+        serde_json::json!("unsupported-in-p0")
+    );
+    assert_eq!(responses[2]["ok"], serde_json::json!(false));
+    assert_eq!(responses[3], serde_json::json!({"id": 4, "ok": true}));
+    assert_eq!(
+        responses[4],
+        serde_json::json!({"id": 5, "ok": true, "type": "(fn (number number) : number)"})
+    );
+    assert!(responses[5]["type"].as_str().expect("type").contains("(Result"));
+    assert_eq!(
+        responses[6],
+        serde_json::json!({"id": 7, "ok": true, "results": [{"example": "example 0", "pass": true}]})
+    );
+    assert_eq!(responses[7]["ok"], serde_json::json!(false));
+    assert_eq!(responses[7]["errors"][0]["kind"], serde_json::json!("type-mismatch"));
+
+    assert_golden_json("repl.responses.json", serde_json::Value::Array(responses));
+}
+
+#[test]
+fn cli_compile_money_cart_out_dir_and_node_run() {
+    let dir = temp_dir("compile");
+    let money = fixture_path("money.lts");
+    let cart = fixture_path("cart.lts");
+    let out_dir = dir.join("out");
+    let out = run_lists(
+        &["compile", &money, &cart, "--out", out_dir.to_str().expect("utf8")],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let diags: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout は Diagnostic[] の JSON");
+    assert_eq!(diags, serde_json::json!([]), "{stdout}");
+    for f in ["money.js", "money.js.map", "cart.js", "cart.js.map", "runtime.js"] {
+        assert!(out_dir.join(f).exists(), "{f} が出力されていること");
+    }
+    let run = Command::new("node")
+        .arg("cart.js")
+        .current_dir(&out_dir)
+        .output()
+        .expect("node を起動できること");
+    let so = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&run.stderr));
+    assert!(so.contains("example 0: ok"), "{so}");
+}
+
+#[test]
+fn cli_compile_broken_exits_1_with_parse_error_json() {
+    let dir = temp_dir("compile-bad");
+    let broken = fixture_path("broken.lts");
+    let out = run_lists(&["compile", &broken, "--out", dir.to_str().expect("utf8")], None);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let diags: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout は Diagnostic[] の JSON");
+    let arr = diags.as_array().expect("array");
+    assert!(arr.iter().any(|d| d["kind"] == "parse-error"), "{stdout}");
+}
+
+#[test]
+fn cli_fmt_in_place_idempotent() {
+    let dir = temp_dir("fmt");
+    let target = dir.join("money.lts");
+    std::fs::copy(fixture_path("money.lts"), &target).expect("copy");
+    let original = std::fs::read_to_string(&target).expect("read");
+
+    let out1 = run_lists(&["fmt", target.to_str().expect("utf8")], None);
+    assert_eq!(out1.status.code(), Some(0), "{}", String::from_utf8_lossy(&out1.stderr));
+    assert_eq!(String::from_utf8_lossy(&out1.stdout).trim(), "[]");
+    let once = std::fs::read_to_string(&target).expect("read");
+    assert_ne!(once, original, "fmt は in-place で書き換える");
+
+    let out2 = run_lists(&["fmt", target.to_str().expect("utf8")], None);
+    assert_eq!(out2.status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&target).expect("read"), once, "fmt は冪等");
+
+    let golden = format!("{}/tests/golden/money.fmt.lts", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var("UPDATE_SNAPSHOTS").is_ok() {
+        std::fs::write(&golden, &once).expect("write golden");
+    }
+    let expected = std::fs::read_to_string(&golden).expect("golden (UPDATE_SNAPSHOTS=1 で生成)");
+    assert_eq!(once, expected);
+}
+
+#[test]
+fn cli_unknown_subcommand_is_usage_error() {
+    let out = run_lists(&["nope"], None);
+    assert_eq!(out.status.code(), Some(2));
+}

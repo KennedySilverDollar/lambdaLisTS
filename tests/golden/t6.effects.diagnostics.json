@@ -1,0 +1,45 @@
+[
+  {
+    "data": {
+      "actual": "nil",
+      "expected": "(Result ?2 nil)",
+      "path": "(defn pure-run).body.binds.0"
+    },
+    "fix": {
+      "op": "replace",
+      "path": "(defn pure-run).body.binds.0",
+      "template": "(Result ?2 nil)"
+    },
+    "kind": "type-mismatch",
+    "message": "型が一致しません: 期待 (Result ?2 nil)、実際 nil",
+    "severity": "error",
+    "span": {
+      "col": 3,
+      "end": 185,
+      "file": "effects.lts",
+      "line": 5,
+      "start": 147
+    }
+  },
+  {
+    "data": {
+      "effect": "log",
+      "path": "(defn pure-run)"
+    },
+    "fix": {
+      "op": "replace",
+      "path": "(defn pure-run)",
+      "template": "defn!"
+    },
+    "kind": "effect-violation",
+    "message": "純粋関数 'pure-run' >本体でエフェクト 'log!' を呼んでいます（defn! が必要です §7.4）",
+    "severity": "error",
+    "span": {
+      "col": 8,
+      "end": 172,
+      "file": "effects.lts",
+      "line": 6,
+      "start": 158
+    }
+  }
+]

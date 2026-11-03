@@ -1,0 +1,7 @@
+{
+  "add-money": "(fn ((obj (amount : number) (currency : string)) (obj (amount : number) (currency : string))) : (Result (obj (amount : number) (currency : string)) string))",
+  "check-items": "(fn ((Array (obj (id : string) (price : (obj (amount : number) (currency : string))) (qty : number)))) : (Result nil (union (obj (id : string) (tag \"NegativeQty\")) (obj (tag \"EmptyCart\")))))",
+  "place-order": "(fn ((Array (obj (id : string) (price : (obj (amount : number) (currency : string))) (qty : number)))) : (Result (obj (amount : number) (currency : string)) (union (obj (id : string) (tag \"NegativeQty\")) (obj (tag \"EmptyCart\")) string)))",
+  "total": "(fn ((Array (obj (id : string) (price : (obj (amount : number) (currency : string))) (qty : number)))) : (Result (obj (amount : number) (currency : string)) string))",
+  "zero": "(fn () : (obj (amount : number) (currency : string)))"
+}

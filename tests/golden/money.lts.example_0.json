@@ -1,0 +1,203 @@
+{
+  "Example": {
+    "actual": {
+      "App": {
+        "args": [
+          {
+            "Obj": {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 34,
+                        "end": 431,
+                        "file": "money.lts",
+                        "line": 14,
+                        "start": 430
+                      },
+                      "value": {
+                        "Num": 1.0
+                      }
+                    }
+                  }
+                ],
+                [
+                  "currency",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 47,
+                        "end": 448,
+                        "file": "money.lts",
+                        "line": 14,
+                        "start": 443
+                      },
+                      "value": {
+                        "Str": "JPY"
+                      }
+                    }
+                  }
+                ]
+              ],
+              "span": {
+                "col": 21,
+                "end": 450,
+                "file": "money.lts",
+                "line": 14,
+                "start": 417
+              }
+            }
+          },
+          {
+            "Obj": {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 34,
+                        "end": 485,
+                        "file": "money.lts",
+                        "line": 15,
+                        "start": 484
+                      },
+                      "value": {
+                        "Num": 2.0
+                      }
+                    }
+                  }
+                ],
+                [
+                  "currency",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 47,
+                        "end": 502,
+                        "file": "money.lts",
+                        "line": 15,
+                        "start": 497
+                      },
+                      "value": {
+                        "Str": "JPY"
+                      }
+                    }
+                  }
+                ]
+              ],
+              "span": {
+                "col": 21,
+                "end": 504,
+                "file": "money.lts",
+                "line": 15,
+                "start": 471
+              }
+            }
+          }
+        ],
+        "f": {
+          "Var": {
+            "name": "add-money",
+            "span": {
+              "col": 10,
+              "end": 505,
+              "file": "money.lts",
+              "line": 14,
+              "start": 406
+            }
+          }
+        },
+        "span": {
+          "col": 10,
+          "end": 505,
+          "file": "money.lts",
+          "line": 14,
+          "start": 406
+        }
+      }
+    },
+    "expected": {
+      "App": {
+        "args": [
+          {
+            "Obj": {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 23,
+                        "end": 529,
+                        "file": "money.lts",
+                        "line": 16,
+                        "start": 528
+                      },
+                      "value": {
+                        "Num": 3.0
+                      }
+                    }
+                  }
+                ],
+                [
+                  "currency",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 36,
+                        "end": 546,
+                        "file": "money.lts",
+                        "line": 16,
+                        "start": 541
+                      },
+                      "value": {
+                        "Str": "JPY"
+                      }
+                    }
+                  }
+                ]
+              ],
+              "span": {
+                "col": 10,
+                "end": 548,
+                "file": "money.lts",
+                "line": 16,
+                "start": 515
+              }
+            }
+          }
+        ],
+        "f": {
+          "Var": {
+            "name": "ok",
+            "span": {
+              "col": 6,
+              "end": 549,
+              "file": "money.lts",
+              "line": 16,
+              "start": 511
+            }
+          }
+        },
+        "span": {
+          "col": 6,
+          "end": 549,
+          "file": "money.lts",
+          "line": 16,
+          "start": 511
+        }
+      }
+    },
+    "path": "(example 0)",
+    "span": {
+      "col": 1,
+      "end": 550,
+      "file": "money.lts",
+      "line": 14,
+      "start": 397
+    }
+  }
+}

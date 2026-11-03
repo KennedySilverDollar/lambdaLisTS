@@ -1,0 +1,17 @@
+{
+  "Import": {
+    "names": [
+      "Money",
+      "add-money",
+      "zero"
+    ],
+    "path": "./money.lts",
+    "span": {
+      "col": 1,
+      "end": 57,
+      "file": "cart.lts",
+      "line": 2,
+      "start": 12
+    }
+  }
+}

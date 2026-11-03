@@ -1,0 +1,399 @@
+{
+  "Defn": {
+    "body": {
+      "App": {
+        "args": [
+          {
+            "Var": {
+              "name": "items",
+              "span": {
+                "col": 5,
+                "end": 886,
+                "file": "cart.lts",
+                "line": 28,
+                "start": 881
+              }
+            }
+          },
+          {
+            "App": {
+              "args": [
+                {
+                  "App": {
+                    "args": [],
+                    "f": {
+                      "Var": {
+                        "name": "zero",
+                        "span": {
+                          "col": 9,
+                          "end": 901,
+                          "file": "cart.lts",
+                          "line": 29,
+                          "start": 895
+                        }
+                      }
+                    },
+                    "span": {
+                      "col": 9,
+                      "end": 901,
+                      "file": "cart.lts",
+                      "line": 29,
+                      "start": 895
+                    }
+                  }
+                }
+              ],
+              "f": {
+                "Var": {
+                  "name": "ok",
+                  "span": {
+                    "col": 5,
+                    "end": 902,
+                    "file": "cart.lts",
+                    "line": 29,
+                    "start": 891
+                  }
+                }
+              },
+              "span": {
+                "col": 5,
+                "end": 902,
+                "file": "cart.lts",
+                "line": 29,
+                "start": 891
+              }
+            }
+          },
+          {
+            "Lam": {
+              "body": {
+                "App": {
+                  "args": [
+                    {
+                      "Var": {
+                        "name": "acc",
+                        "span": {
+                          "col": 13,
+                          "end": 995,
+                          "file": "cart.lts",
+                          "line": 31,
+                          "start": 992
+                        }
+                      }
+                    },
+                    {
+                      "Lam": {
+                        "body": {
+                          "App": {
+                            "args": [
+                              {
+                                "Var": {
+                                  "name": "m",
+                                  "span": {
+                                    "col": 30,
+                                    "end": 1066,
+                                    "file": "cart.lts",
+                                    "line": 32,
+                                    "start": 1065
+                                  }
+                                }
+                              },
+                              {
+                                "Obj": {
+                                  "fields": [
+                                    [
+                                      "amount",
+                                      {
+                                        "App": {
+                                          "args": [
+                                            {
+                                              "Field": {
+                                                "name": "amount",
+                                                "obj": {
+                                                  "Field": {
+                                                    "name": "price",
+                                                    "obj": {
+                                                      "Var": {
+                                                        "name": "i",
+                                                        "span": {
+                                                          "col": 48,
+                                                          "end": 1097,
+                                                          "file": "cart.lts",
+                                                          "line": 32,
+                                                          "start": 1083
+                                                        }
+                                                      }
+                                                    },
+                                                    "span": {
+                                                      "col": 48,
+                                                      "end": 1097,
+                                                      "file": "cart.lts",
+                                                      "line": 32,
+                                                      "start": 1083
+                                                    }
+                                                  }
+                                                },
+                                                "span": {
+                                                  "col": 48,
+                                                  "end": 1097,
+                                                  "file": "cart.lts",
+                                                  "line": 32,
+                                                  "start": 1083
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "Field": {
+                                                "name": "qty",
+                                                "obj": {
+                                                  "Var": {
+                                                    "name": "i",
+                                                    "span": {
+                                                      "col": 63,
+                                                      "end": 1103,
+                                                      "file": "cart.lts",
+                                                      "line": 32,
+                                                      "start": 1098
+                                                    }
+                                                  }
+                                                },
+                                                "span": {
+                                                  "col": 63,
+                                                  "end": 1103,
+                                                  "file": "cart.lts",
+                                                  "line": 32,
+                                                  "start": 1098
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "f": {
+                                            "Var": {
+                                              "name": "*",
+                                              "span": {
+                                                "col": 45,
+                                                "end": 1104,
+                                                "file": "cart.lts",
+                                                "line": 32,
+                                                "start": 1080
+                                              }
+                                            }
+                                          },
+                                          "span": {
+                                            "col": 45,
+                                            "end": 1104,
+                                            "file": "cart.lts",
+                                            "line": 32,
+                                            "start": 1080
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    [
+                                      "currency",
+                                      {
+                                        "Field": {
+                                          "name": "currency",
+                                          "obj": {
+                                            "Field": {
+                                              "name": "price",
+                                              "obj": {
+                                                "Var": {
+                                                  "name": "i",
+                                                  "span": {
+                                                    "col": 47,
+                                                    "end": 1168,
+                                                    "file": "cart.lts",
+                                                    "line": 33,
+                                                    "start": 1152
+                                                  }
+                                                }
+                                              },
+                                              "span": {
+                                                "col": 47,
+                                                "end": 1168,
+                                                "file": "cart.lts",
+                                                "line": 33,
+                                                "start": 1152
+                                              }
+                                            }
+                                          },
+                                          "span": {
+                                            "col": 47,
+                                            "end": 1168,
+                                            "file": "cart.lts",
+                                            "line": 33,
+                                            "start": 1152
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  ],
+                                  "span": {
+                                    "col": 32,
+                                    "end": 1170,
+                                    "file": "cart.lts",
+                                    "line": 32,
+                                    "start": 1067
+                                  }
+                                }
+                              }
+                            ],
+                            "f": {
+                              "Var": {
+                                "name": "add-money",
+                                "span": {
+                                  "col": 19,
+                                  "end": 1171,
+                                  "file": "cart.lts",
+                                  "line": 32,
+                                  "start": 1054
+                                }
+                              }
+                            },
+                            "span": {
+                              "col": 19,
+                              "end": 1171,
+                              "file": "cart.lts",
+                              "line": 32,
+                              "start": 1054
+                            }
+                          }
+                        },
+                        "params": [
+                          {
+                            "name": "m",
+                            "ty": {
+                              "Alias": "Money"
+                            }
+                          }
+                        ],
+                        "pure": true,
+                        "ret": {
+                          "ResultT": [
+                            {
+                              "Alias": "Money"
+                            },
+                            "Str"
+                          ]
+                        },
+                        "span": {
+                          "col": 17,
+                          "end": 1172,
+                          "file": "cart.lts",
+                          "line": 31,
+                          "start": 996
+                        }
+                      }
+                    }
+                  ],
+                  "f": {
+                    "Var": {
+                      "name": "bind",
+                      "span": {
+                        "col": 7,
+                        "end": 1173,
+                        "file": "cart.lts",
+                        "line": 31,
+                        "start": 986
+                      }
+                    }
+                  },
+                  "span": {
+                    "col": 7,
+                    "end": 1173,
+                    "file": "cart.lts",
+                    "line": 31,
+                    "start": 986
+                  }
+                }
+              },
+              "params": [
+                {
+                  "name": "acc",
+                  "ty": {
+                    "ResultT": [
+                      {
+                        "Alias": "Money"
+                      },
+                      "Str"
+                    ]
+                  }
+                },
+                {
+                  "name": "i",
+                  "ty": {
+                    "Alias": "CartItem"
+                  }
+                }
+              ],
+              "pure": true,
+              "ret": {
+                "ResultT": [
+                  {
+                    "Alias": "Money"
+                  },
+                  "Str"
+                ]
+              },
+              "span": {
+                "col": 5,
+                "end": 1174,
+                "file": "cart.lts",
+                "line": 30,
+                "start": 907
+              }
+            }
+          }
+        ],
+        "f": {
+          "Var": {
+            "name": "fold-left",
+            "span": {
+              "col": 3,
+              "end": 1175,
+              "file": "cart.lts",
+              "line": 27,
+              "start": 866
+            }
+          }
+        },
+        "span": {
+          "col": 3,
+          "end": 1175,
+          "file": "cart.lts",
+          "line": 27,
+          "start": 866
+        }
+      }
+    },
+    "name": "total",
+    "params": [
+      {
+        "name": "items",
+        "ty": {
+          "Array": {
+            "Alias": "CartItem"
+          }
+        }
+      }
+    ],
+    "path": "(defn total)",
+    "pure": true,
+    "ret": {
+      "ResultT": [
+        {
+          "Alias": "Money"
+        },
+        "Str"
+      ]
+    },
+    "span": {
+      "col": 1,
+      "end": 1176,
+      "file": "cart.lts",
+      "line": 26,
+      "start": 801
+    }
+  }
+}

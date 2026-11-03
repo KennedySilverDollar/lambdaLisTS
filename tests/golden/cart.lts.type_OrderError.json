@@ -1,0 +1,32 @@
+{
+  "Type": {
+    "name": "OrderError",
+    "path": "(type OrderError)",
+    "span": {
+      "col": 1,
+      "end": 228,
+      "file": "cart.lts",
+      "line": 7,
+      "start": 129
+    },
+    "ty": {
+      "Union": [
+        {
+          "Obj": {
+            "tag": {
+              "Literal": "EmptyCart"
+            }
+          }
+        },
+        {
+          "Obj": {
+            "id": "Str",
+            "tag": {
+              "Literal": "NegativeQty"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

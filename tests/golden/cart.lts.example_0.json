@@ -1,0 +1,116 @@
+{
+  "Example": {
+    "actual": {
+      "App": {
+        "args": [
+          {
+            "App": {
+              "args": [],
+              "f": {
+                "Var": {
+                  "name": "array",
+                  "span": {
+                    "col": 23,
+                    "end": 1350,
+                    "file": "cart.lts",
+                    "line": 41,
+                    "start": 1343
+                  }
+                }
+              },
+              "span": {
+                "col": 23,
+                "end": 1350,
+                "file": "cart.lts",
+                "line": 41,
+                "start": 1343
+              }
+            }
+          }
+        ],
+        "f": {
+          "Var": {
+            "name": "place-order",
+            "span": {
+              "col": 10,
+              "end": 1351,
+              "file": "cart.lts",
+              "line": 41,
+              "start": 1330
+            }
+          }
+        },
+        "span": {
+          "col": 10,
+          "end": 1351,
+          "file": "cart.lts",
+          "line": 41,
+          "start": 1330
+        }
+      }
+    },
+    "expected": {
+      "App": {
+        "args": [
+          {
+            "Obj": {
+              "fields": [
+                [
+                  "tag",
+                  {
+                    "Lit": {
+                      "span": {
+                        "col": 21,
+                        "end": 1383,
+                        "file": "cart.lts",
+                        "line": 42,
+                        "start": 1372
+                      },
+                      "value": {
+                        "Str": "EmptyCart"
+                      }
+                    }
+                  }
+                ]
+              ],
+              "span": {
+                "col": 11,
+                "end": 1385,
+                "file": "cart.lts",
+                "line": 42,
+                "start": 1362
+              }
+            }
+          }
+        ],
+        "f": {
+          "Var": {
+            "name": "err",
+            "span": {
+              "col": 6,
+              "end": 1386,
+              "file": "cart.lts",
+              "line": 42,
+              "start": 1357
+            }
+          }
+        },
+        "span": {
+          "col": 6,
+          "end": 1386,
+          "file": "cart.lts",
+          "line": 42,
+          "start": 1357
+        }
+      }
+    },
+    "path": "(example 0)",
+    "span": {
+      "col": 1,
+      "end": 1387,
+      "file": "cart.lts",
+      "line": 41,
+      "start": 1321
+    }
+  }
+}

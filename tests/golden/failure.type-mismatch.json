@@ -1,0 +1,24 @@
+[
+  {
+    "data": {
+      "actual": "(Result string ?2)",
+      "expected": "number",
+      "path": "(defn f).body"
+    },
+    "fix": {
+      "op": "replace",
+      "path": "(defn f).body",
+      "template": "number"
+    },
+    "kind": "type-mismatch",
+    "message": "型が一致しません: 期待 number、実際 (Result string ?2)",
+    "severity": "error",
+    "span": {
+      "col": 21,
+      "end": 28,
+      "file": "test.lts",
+      "line": 1,
+      "start": 20
+    }
+  }
+]

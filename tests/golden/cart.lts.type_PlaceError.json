@@ -1,0 +1,21 @@
+{
+  "Type": {
+    "name": "PlaceError",
+    "path": "(type PlaceError)",
+    "span": {
+      "col": 1,
+      "end": 381,
+      "file": "cart.lts",
+      "line": 13,
+      "start": 338
+    },
+    "ty": {
+      "Union": [
+        {
+          "Alias": "OrderError"
+        },
+        "Str"
+      ]
+    }
+  }
+}

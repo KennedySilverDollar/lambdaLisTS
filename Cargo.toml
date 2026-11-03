@@ -1,0 +1,13 @@
+[package]
+name = "lists"
+version = "0.1.0"
+edition = "2021"
+description = "λ LisTS P0 compiler (Rust edition) — scaffold"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+sourcemap = "9"

@@ -1,0 +1,3 @@
+;; cycle-b.lts
+(import "./cycle-a.lts" (g))
+(defn f (x : number) : number (g x))
