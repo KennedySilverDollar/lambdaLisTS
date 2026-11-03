@@ -1,0 +1,25 @@
+[
+  {
+    "data": {
+      "missing": [
+        "(obj (tag \"OutOfStock\"))"
+      ],
+      "path": "(defn show-error).body"
+    },
+    "fix": {
+      "op": "insert",
+      "path": "(defn show-error).body.arms",
+      "template": "[(obj (tag \"OutOfStock\")) \"...\"]"
+    },
+    "kind": "non-exhaustive",
+    "message": "match が網羅的ではありません。不足パターン: (obj (tag \"OutOfStock\"))",
+    "severity": "error",
+    "span": {
+      "col": 3,
+      "end": 323,
+      "file": "stock.lts",
+      "line": 10,
+      "start": 223
+    }
+  }
+]
