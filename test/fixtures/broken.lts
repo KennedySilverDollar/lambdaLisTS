@@ -1,0 +1,5 @@
+;; B-3 broken.lts（T5 用：パーサ回復）
+(defn broken (x : number) : number
+  (if (< x 0) (- 0 x) x
+(defn ok (x : number) : number
+  (+ x 1))
