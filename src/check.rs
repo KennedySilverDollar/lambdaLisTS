@@ -3,9 +3,11 @@ use std::rc::Rc;
 
 use serde_json::json;
 
+use crate::ast::print_pattern;
 use crate::desugar::{desugar, CoreDef};
 use crate::diagnostic::{ast_path, DiagKind, Diagnostic, Patch, Severity};
-use crate::ir::{Core, PatKind};
+use crate::exhaustive::check_exhaustive;
+use crate::ir::{Core, Pat, PatKind};
 use crate::lexer::tokenize;
 use crate::parser::parse_program;
 use crate::resolver::{
@@ -828,6 +830,45 @@ impl<'a> Checker<'a> {
             return Vec::new();
         };
         let s = prune(st, &self.subst);
+        let patterns: Vec<Pat> = arms.iter().map(|a| a.pattern.clone()).collect();
+        let ex = check_exhaustive(&s, &patterns, &mut self.subst, &self.aliases);
+        if !ex.missing.is_empty() {
+            let missing_str: Vec<String> = ex.missing.iter().map(print_pattern).collect();
+            self.diag(
+                DiagKind::NonExhaustive,
+                span.clone(),
+                format!(
+                    "match が網羅的ではありません。不足パターン: {}",
+                    missing_str.join(", ")
+                ),
+                Some(json!({ "path": path, "missing": missing_str })),
+                Some(Patch::Insert {
+                    path: ast_path(path, &["arms"]),
+                    template: ex
+                        .missing
+                        .iter()
+                        .map(|m| format!("[{} \"...\"]", print_pattern(m)))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                }),
+                Severity::Error,
+            );
+        }
+        for i in &ex.redundant {
+            self.diag(
+                DiagKind::RedundantArm,
+                arms[*i].body.span().clone(),
+                format!("アーム {i} は到達不能です（冗長アーム）"),
+                Some(json!({
+                    "path": ast_path(path, &["arms", &i.to_string()]),
+                    "arm": i
+                })),
+                Some(Patch::Delete {
+                    path: ast_path(path, &["arms", &i.to_string()]),
+                }),
+                Severity::Warning,
+            );
+        }
         let mut remaining: Option<Vec<Type>> = match &s {
             Type::Union(m) => Some(m.clone()),
             _ => None,

@@ -1,7 +1,41 @@
 use std::rc::Rc;
 
+use crate::ir::{Pat as CorePat, PatKind};
 use crate::span::Span;
 use crate::token::Trivia;
+use crate::value::Value;
+
+pub fn print_pattern(p: &CorePat) -> String {
+    match &p.kind {
+        PatKind::Wildcard => "_".to_string(),
+        PatKind::Var(name) => name.to_string(),
+        PatKind::Lit(v) => match v {
+            Value::Nil => "nil".to_string(),
+            Value::Str(s) => {
+                serde_json::to_string(s.as_ref()).unwrap_or_else(|_| format!("\"{s}\""))
+            }
+            Value::Num(n) => format!("{n}"),
+            Value::Bool(b) => format!("{b}"),
+            _ => "nil".to_string(),
+        },
+        PatKind::Obj(fields) => format!(
+            "(obj {})",
+            fields
+                .iter()
+                .map(|(n, sub)| format!("({n} {})", print_pattern(sub)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        PatKind::Array(els) => format!(
+            "(Array {})",
+            els.iter().map(print_pattern).collect::<Vec<_>>().join(" ")
+        ),
+        PatKind::Or(ps) => format!(
+            "(or {})",
+            ps.iter().map(print_pattern).collect::<Vec<_>>().join(" ")
+        ),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LitValue {
