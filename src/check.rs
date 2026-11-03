@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::ast::print_pattern;
 use crate::desugar::{desugar, CoreDef};
 use crate::diagnostic::{ast_path, DiagKind, Diagnostic, Patch, Severity};
+use crate::effects::check_effects;
 use crate::exhaustive::check_exhaustive;
 use crate::ir::{Core, Pat, PatKind};
 use crate::lexer::tokenize;
@@ -224,6 +225,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        self.diagnostics.extend(check_effects(defs));
         ModuleResult {
             diagnostics: self.diagnostics,
             value_types: self.values,

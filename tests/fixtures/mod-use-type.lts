@@ -1,0 +1,4 @@
+;; 型名前空間の import（§6.6: 型も import 対象）→ 診断ゼロ
+(import "./mod-pub.lts" (T))
+
+(defn f (x : T) : T x)

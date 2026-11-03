@@ -21,7 +21,17 @@ pub fn resolve_import_path(from_file: &str, import_path: &str) -> Option<String>
             Err(_) => joined,
         }
     };
-    let s = abs.to_string_lossy().into_owned();
+    let mut normalized = std::path::PathBuf::new();
+    for c in abs.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    let s = normalized.to_string_lossy().into_owned();
     Some(if s.ends_with(".lts") {
         s
     } else {
@@ -123,4 +133,134 @@ pub fn check_import_names(
         });
     }
     diags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::{check_file, ModuleCache};
+    use crate::diagnostic::DiagKind;
+
+    fn fixture_path(name: &str) -> String {
+        format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), name)
+    }
+
+    #[test]
+    fn resolve_import_path_relative_only() {
+        assert_eq!(
+            resolve_import_path("/a/b/c.lts", "./x.lts"),
+            Some("/a/b/x.lts".to_string())
+        );
+        assert_eq!(
+            resolve_import_path("/a/b/c.lts", "../y"),
+            Some("/a/y.lts".to_string())
+        );
+        assert_eq!(resolve_import_path("/a/b/c.lts", "some-pkg"), None);
+    }
+
+    #[test]
+    fn module_graph_stack_detects_cycles() {
+        let mut g = ModuleGraph::default();
+        g.enter("/a.lts");
+        assert!(g.is_on_stack("/a.lts"));
+        g.enter("/b.lts");
+        assert!(g.is_on_stack("/a.lts"));
+        assert!(!g.is_on_stack("/c.lts"));
+        g.leave();
+        assert!(!g.is_on_stack("/b.lts"));
+        assert!(g.is_on_stack("/a.lts"));
+    }
+
+    #[test]
+    fn check_import_names_namespaces() {
+        let info = ModuleInfo {
+            exports: vec!["pub".to_string()],
+            value_names: BTreeSet::from(["pub".to_string(), "hidden".to_string()]),
+            type_names: BTreeSet::from(["T".to_string()]),
+            effect_names: BTreeSet::from(["log".to_string()]),
+        };
+        let span = Span {
+            file: Rc::from("t.lts"),
+            start: 0,
+            end: 1,
+            line: 1,
+            col: 1,
+        };
+        assert!(check_import_names(&info, &[Rc::from("pub"), Rc::from("T")], &span, "./m.lts", "p").is_empty());
+        let bad = check_import_names(
+            &info,
+            &[Rc::from("hidden"), Rc::from("log"), Rc::from("nope")],
+            &span,
+            "./m.lts",
+            "p",
+        );
+        let kinds: Vec<DiagKind> = bad.iter().map(|d| d.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DiagKind::NotExported,
+                DiagKind::NotExported,
+                DiagKind::UnboundSymbol
+            ]
+        );
+    }
+
+    #[test]
+    fn cart_lts_imports_money_clean() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("cart.lts"), &mut cache);
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn mod_use_ok_exports_only_value() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("mod-use-ok.lts"), &mut cache);
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn mod_use_bad_not_exported() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("mod-use-bad.lts"), &mut cache);
+        let d = r
+            .diagnostics
+            .iter()
+            .find(|d| d.kind == DiagKind::NotExported)
+            .expect("not-exported");
+        assert!(d.message.contains("hidden"));
+        assert_eq!(d.data.as_ref().expect("data")["name"], "hidden");
+    }
+
+    #[test]
+    fn mod_use_type_imports_type_namespace() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("mod-use-type.lts"), &mut cache);
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn mod_missing_is_import_not_found() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("mod-missing.lts"), &mut cache);
+        assert!(r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagKind::ImportNotFound));
+    }
+
+    #[test]
+    fn cycle_a_b_report_module_cycle() {
+        for name in ["cycle-a.lts", "cycle-b.lts"] {
+            let mut cache = ModuleCache::default();
+            let r = check_file(&fixture_path(name), &mut cache);
+            assert!(
+                r.diagnostics
+                    .iter()
+                    .any(|d| d.kind == DiagKind::ModuleCycle),
+                "{name}: {:?}",
+                r.diagnostics
+            );
+        }
+    }
 }
