@@ -22,6 +22,25 @@ pub enum Core {
     Error { message: String, span: Span },
 }
 
+impl Core {
+    pub fn span(&self) -> &Span {
+        match self {
+            Core::Lit { span, .. }
+            | Core::Var { span, .. }
+            | Core::Lam { span, .. }
+            | Core::App { span, .. }
+            | Core::Let { span, .. }
+            | Core::If { span, .. }
+            | Core::Match { span, .. }
+            | Core::Obj { span, .. }
+            | Core::Field { span, .. }
+            | Core::EffectCall { span, .. }
+            | Core::Do { span, .. }
+            | Core::Error { span, .. } => span,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     pub name: Rc<str>,

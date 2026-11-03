@@ -92,3 +92,62 @@ fn desugar_is_deterministic() {
         assert_eq!(g1, g2, "{fixture}: diagnostics should be deterministic");
     }
 }
+
+use lists::check::{check_file, type_of_all, ModuleCache};
+use lists::diagnostic::{DiagKind, Patch};
+
+fn golden_file(name: &str) -> String {
+    format!("{}/tests/golden/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn assert_golden(label: &str, actual: serde_json::Value) {
+    let path = golden_file(label);
+    if std::env::var("UPDATE_SNAPSHOTS").is_ok() {
+        let pretty = serde_json::to_string_pretty(&actual).expect("pretty");
+        std::fs::write(&path, format!("{pretty}\n")).expect("write golden");
+    }
+    let content = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("golden がありません: {path} (UPDATE_SNAPSHOTS=1 cargo test で生成)"));
+    let expected: serde_json::Value = serde_json::from_str(&content).expect("golden json");
+    assert_eq!(actual, expected, "{path}");
+}
+
+fn check_fixture_types(fixture: &str) {
+    let path = format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR"));
+    let mut cache = ModuleCache::default();
+    let result = check_file(&path, &mut cache);
+    assert!(
+        result.diagnostics.is_empty(),
+        "{fixture}: {:?}",
+        result.diagnostics
+    );
+    let types = type_of_all(&result);
+    assert_golden(&format!("{fixture}.types.json"), serde_json::to_value(&types).expect("ser"));
+}
+
+#[test]
+fn money_lts_typeof_golden() {
+    check_fixture_types("money.lts");
+}
+
+#[test]
+fn cart_lts_typeof_golden() {
+    check_fixture_types("cart.lts");
+}
+
+#[test]
+fn failure_case_type_mismatch_golden() {
+    let mut cache = ModuleCache::default();
+    let r = lists::check::check_source("(defn f () : number (ok \"a\"))", "test.lts", &mut cache);
+    assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+    let d = &r.diagnostics[0];
+    assert_eq!(d.kind, DiagKind::TypeMismatch);
+    let data = d.data.as_ref().expect("data");
+    assert_eq!(data["expected"], "number");
+    assert!(data["actual"].as_str().expect("actual").contains("(Result string"));
+    assert!(matches!(&d.fix, Some(Patch::Replace { template, .. }) if template == "number"));
+    assert_golden(
+        "failure.type-mismatch.json",
+        serde_json::to_value(&r.diagnostics).expect("ser"),
+    );
+}

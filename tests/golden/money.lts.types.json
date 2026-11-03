@@ -1,0 +1,4 @@
+{
+  "add-money": "(fn ((obj (amount : number) (currency : string)) (obj (amount : number) (currency : string))) : (Result (obj (amount : number) (currency : string)) string))",
+  "zero": "(fn () : (obj (amount : number) (currency : string)))"
+}

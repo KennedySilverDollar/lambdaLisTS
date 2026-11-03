@@ -1,16 +1,1109 @@
-use crate::diagnostic::Diagnostic;
-use crate::ir::Core;
-use crate::types::{Scheme, Type};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
-#[derive(Debug, Default)]
-pub struct CheckCtx {
-    pub globals: Vec<(String, Scheme)>,
+use serde_json::json;
+
+use crate::desugar::{desugar, CoreDef};
+use crate::diagnostic::{ast_path, DiagKind, Diagnostic, Patch, Severity};
+use crate::ir::{Core, PatKind};
+use crate::lexer::tokenize;
+use crate::parser::parse_program;
+use crate::resolver::{
+    check_import_names, file_exists, import_not_found, module_cycle, resolve_import_path,
+    ModuleGraph, ModuleInfo,
+};
+use crate::span::Span;
+use crate::stdlib::stdlib;
+use crate::types::{
+    find_unresolved_alias, normalize_type, normalize_union, print_type, print_type_plain,
+    AliasEnv, Scheme, Type,
+};
+use crate::unify::{apply_subst, prune, unify, Subst};
+use crate::value::Value;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModuleResult {
+    pub diagnostics: Vec<Diagnostic>,
+    pub value_types: BTreeMap<Rc<str>, Type>,
+    pub type_aliases: AliasEnv,
+    pub effects: BTreeMap<Rc<str>, Type>,
+    pub exports: Vec<Rc<str>>,
 }
 
-pub fn infer(_ctx: &CheckCtx, _core: &Core) -> Result<Type, Vec<Diagnostic>> {
-    unimplemented!("check: SPEC §6.3 infer — P0 未実装")
+#[derive(Default)]
+pub struct ModuleCache {
+    pub modules: BTreeMap<String, ModuleResult>,
+    pub graph: ModuleGraph,
 }
 
-pub fn check(_ctx: &CheckCtx, _core: &Core, _expected: &Type) -> Result<(), Vec<Diagnostic>> {
-    unimplemented!("check: SPEC §6.3 check — P0 未実装")
+pub fn new_module_cache() -> ModuleCache {
+    ModuleCache::default()
+}
+
+pub fn check_program(defs: &[CoreDef], file: &str, cache: &mut ModuleCache) -> ModuleResult {
+    Checker::new(file, cache).run(defs)
+}
+
+pub fn check_source(src: &str, file: &str, cache: &mut ModuleCache) -> ModuleResult {
+    let lex = tokenize(src, file);
+    let (program, mut diags) = parse_program(&lex);
+    let (defs, _desugar_diags) = desugar(&program);
+    let mut res = check_program(&defs, file, cache);
+    diags.append(&mut res.diagnostics);
+    res.diagnostics = diags;
+    res
+}
+
+pub fn check_file(path: &str, cache: &mut ModuleCache) -> ModuleResult {
+    match std::fs::read_to_string(path) {
+        Ok(src) => check_source(&src, path, cache),
+        Err(_) => ModuleResult {
+            diagnostics: vec![import_not_found(
+                Span {
+                    file: Rc::from(path),
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 1,
+                },
+                path,
+                "(program)",
+            )],
+            ..Default::default()
+        },
+    }
+}
+
+pub fn type_of_all(result: &ModuleResult) -> BTreeMap<String, String> {
+    result
+        .value_types
+        .iter()
+        .map(|(name, t)| {
+            (
+                name.to_string(),
+                print_type(&normalize_type(t, &result.type_aliases), &result.type_aliases),
+            )
+        })
+        .collect()
+}
+
+const VARIADIC: &[(&str, &str)] = &[("str-concat", "string"), ("array", "fresh")];
+
+type MatchArms<'c> = Vec<(String, BTreeMap<Rc<str>, Type>, &'c Core)>;
+
+struct Checker<'a> {
+    file: &'a str,
+    cache: &'a mut ModuleCache,
+    diagnostics: Vec<Diagnostic>,
+    subst: Subst,
+    aliases: AliasEnv,
+    values: BTreeMap<Rc<str>, Type>,
+    effects: BTreeMap<Rc<str>, Type>,
+    scope: Vec<BTreeMap<Rc<str>, Type>>,
+    next_var_id: usize,
+    stdlib: BTreeMap<Rc<str>, Scheme>,
+}
+
+impl<'a> Checker<'a> {
+    fn new(file: &'a str, cache: &'a mut ModuleCache) -> Self {
+        Checker {
+            file,
+            cache,
+            diagnostics: Vec::new(),
+            subst: Vec::new(),
+            aliases: BTreeMap::new(),
+            values: BTreeMap::new(),
+            effects: BTreeMap::new(),
+            scope: Vec::new(),
+            next_var_id: 1,
+            stdlib: stdlib(),
+        }
+    }
+
+    fn run(mut self, defs: &[CoreDef]) -> ModuleResult {
+        let mut exports: Vec<Rc<str>> = Vec::new();
+        for d in defs {
+            if let CoreDef::Type {
+                name, ty, span, path, ..
+            } = d
+            {
+                if self.aliases.contains_key(name) {
+                    self.diag(
+                        DiagKind::DuplicateDefinition,
+                        span.clone(),
+                        format!("型 '{name}' は既に定義されています"),
+                        Some(json!({ "path": path })),
+                        None,
+                        Severity::Error,
+                    );
+                    continue;
+                }
+                self.aliases.insert(name.clone(), ty.clone());
+            }
+        }
+        for d in defs {
+            match d {
+                CoreDef::Import {
+                    path,
+                    names,
+                    span,
+                } => self.load_import(path, names, span),
+                CoreDef::Export { names, .. } => exports.extend(names.iter().cloned()),
+                CoreDef::Type { .. } => {}
+                CoreDef::Effect {
+                    name,
+                    ty,
+                    span,
+                    path,
+                } => {
+                    if self.effects.contains_key(name) || self.values.contains_key(name) {
+                        self.diag(
+                            DiagKind::DuplicateDefinition,
+                            span.clone(),
+                            format!("値名前空間の '{name}' は既に定義されています"),
+                            Some(json!({ "path": path })),
+                            None,
+                            Severity::Error,
+                        );
+                        continue;
+                    }
+                    let t = self.resolve(ty, span, &ast_path(path, &["type"]));
+                    self.effects.insert(name.clone(), t);
+                }
+                CoreDef::Defn { .. } => self.check_defn(d),
+                CoreDef::Example {
+                    actual,
+                    expected,
+                    span,
+                    path,
+                } => {
+                    let a = self.infer(actual, &ast_path(path, &["args", "0"]));
+                    let e = self.infer(expected, &ast_path(path, &["args", "2"]));
+                    if unify(&a, &e, &mut self.subst, &self.aliases).is_none() {
+                        self.type_mismatch(span, path, &e, &a);
+                    }
+                }
+                CoreDef::Prop {
+                    params,
+                    body,
+                    span,
+                    path,
+                    ..
+                } => {
+                    let ptypes: Vec<Type> = params
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()]))
+                        })
+                        .collect();
+                    let frame: BTreeMap<Rc<str>, Type> = params
+                        .iter()
+                        .zip(ptypes.iter())
+                        .map(|(p, t)| (p.name.clone(), t.clone()))
+                        .collect();
+                    self.scope.push(frame);
+                    self.check(body, &Type::Bool, &ast_path(path, &["body"]));
+                    self.scope.pop();
+                }
+                CoreDef::Error {
+                    message,
+                    span,
+                    path,
+                } => {
+                    self.diag(
+                        DiagKind::ParseError,
+                        span.clone(),
+                        message.clone(),
+                        Some(json!({ "path": path })),
+                        None,
+                        Severity::Error,
+                    );
+                }
+            }
+        }
+        ModuleResult {
+            diagnostics: self.diagnostics,
+            value_types: self.values,
+            type_aliases: self.aliases,
+            effects: self.effects,
+            exports,
+        }
+    }
+
+    fn load_import(&mut self, import_path: &str, names: &[Rc<str>], span: &Span) {
+        let Some(target) = resolve_import_path(self.file, import_path) else {
+            return;
+        };
+        if !file_exists(&target) {
+            self.diagnostics
+                .push(import_not_found(span.clone(), import_path, "(import)"));
+            return;
+        }
+        if self.cache.graph.is_on_stack(&target) {
+            self.diagnostics
+                .push(module_cycle(span.clone(), import_path, "(import)"));
+            return;
+        }
+        let cached = self.cache.modules.get(&target).cloned();
+        let mod_result = match cached {
+            Some(m) => m,
+            None => {
+                self.cache.graph.enter(&target);
+                let r = match std::fs::read_to_string(&target) {
+                    Ok(src) => check_source(&src, &target, self.cache),
+                    Err(_) => ModuleResult {
+                        diagnostics: vec![import_not_found(span.clone(), import_path, "(import)")],
+                        ..Default::default()
+                    },
+                };
+                self.cache.graph.leave();
+                self.cache.modules.insert(target.clone(), r.clone());
+                r
+            }
+        };
+        self.diagnostics.extend(mod_result.diagnostics.iter().cloned());
+        let info = ModuleInfo {
+            exports: mod_result.exports.iter().map(|s| s.to_string()).collect(),
+            value_names: mod_result.value_types.keys().map(|k| k.to_string()).collect(),
+            type_names: mod_result.type_aliases.keys().map(|k| k.to_string()).collect(),
+            effect_names: mod_result.effects.keys().map(|k| k.to_string()).collect(),
+        };
+        self.diagnostics
+            .extend(check_import_names(&info, names, span, import_path, "(import)"));
+        for name in names {
+            if let Some(t) = mod_result.value_types.get(name) {
+                self.values.insert(name.clone(), t.clone());
+                continue;
+            }
+            if let Some(t) = mod_result.type_aliases.get(name) {
+                self.aliases.insert(name.clone(), t.clone());
+                continue;
+            }
+            if let Some(t) = mod_result.effects.get(name) {
+                self.effects.insert(name.clone(), t.clone());
+            }
+        }
+    }
+
+    fn check_defn(&mut self, d: &CoreDef) {
+        let CoreDef::Defn {
+            name,
+            params,
+            ret,
+            body,
+            span,
+            path,
+            ..
+        } = d
+        else {
+            return;
+        };
+        if self.values.contains_key(name) || self.effects.contains_key(name) {
+            self.diag(
+                DiagKind::DuplicateDefinition,
+                span.clone(),
+                format!("値名前空間の '{name}' は既に定義されています"),
+                Some(json!({ "path": path })),
+                None,
+                Severity::Error,
+            );
+            return;
+        }
+        let param_types: Vec<Type> = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()])))
+            .collect();
+        let ret_t = self.resolve(ret, span, &ast_path(path, &["ret"]));
+        self.values.insert(
+            name.clone(),
+            Type::FnT(param_types.clone(), Box::new(ret_t.clone())),
+        );
+        let frame: BTreeMap<Rc<str>, Type> = params
+            .iter()
+            .zip(param_types.iter())
+            .map(|(p, t)| (p.name.clone(), t.clone()))
+            .collect();
+        self.scope.push(frame);
+        self.check(body, &ret_t, &ast_path(path, &["body"]));
+        self.scope.pop();
+    }
+
+    fn fresh(&mut self) -> Type {
+        let id = self.next_var_id;
+        self.next_var_id += 1;
+        Type::Var(id)
+    }
+
+    fn instantiate(&mut self, scheme: &Scheme) -> Type {
+        fn rename(t: &Type, map: &BTreeMap<usize, Type>) -> Type {
+            match t {
+                Type::Var(id) => map.get(id).cloned().unwrap_or_else(|| t.clone()),
+                Type::Array(el) => Type::Array(Box::new(rename(el, map))),
+                Type::Union(ms) => Type::Union(ms.iter().map(|m| rename(m, map)).collect()),
+                Type::Obj(fields) => Type::Obj(
+                    fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), rename(v, map)))
+                        .collect(),
+                ),
+                Type::ResultT(ok, err) => Type::ResultT(
+                    Box::new(rename(ok, map)),
+                    Box::new(rename(err, map)),
+                ),
+                Type::FnT(params, ret) => Type::FnT(
+                    params.iter().map(|p| rename(p, map)).collect(),
+                    Box::new(rename(ret, map)),
+                ),
+                _ => t.clone(),
+            }
+        }
+        let mut map: BTreeMap<usize, Type> = BTreeMap::new();
+        for id in &scheme.vars {
+            let f = self.fresh();
+            map.insert(*id, f);
+        }
+        rename(&scheme.body, &map)
+    }
+
+    fn lookup_value(&mut self, name: &str) -> Option<Type> {
+        for frame in self.scope.iter().rev() {
+            if let Some(t) = frame.get(name) {
+                return Some(t.clone());
+            }
+        }
+        if let Some(t) = self.values.get(name) {
+            return Some(t.clone());
+        }
+        let scheme = self.stdlib.get(name).cloned();
+        if let Some(scheme) = scheme {
+            return Some(self.instantiate(&scheme));
+        }
+        None
+    }
+
+    fn resolve(&mut self, t: &Type, span: &Span, path: &str) -> Type {
+        let n = normalize_type(t, &self.aliases);
+        if let Some(unresolved) = find_unresolved_alias(&n) {
+            self.diag(
+                DiagKind::TypeSyntaxError,
+                span.clone(),
+                format!("未定義の型です: '{unresolved}'"),
+                Some(json!({ "path": path })),
+                None,
+                Severity::Error,
+            );
+        }
+        n
+    }
+
+    fn diag(
+        &mut self,
+        kind: DiagKind,
+        span: Span,
+        message: String,
+        data: Option<serde_json::Value>,
+        fix: Option<Patch>,
+        severity: Severity,
+    ) {
+        self.diagnostics.push(Diagnostic {
+            kind,
+            severity,
+            span,
+            message,
+            data,
+            fix,
+        });
+    }
+
+    fn type_mismatch(&mut self, span: &Span, path: &str, expected: &Type, actual: &Type) {
+        let exp = print_type(expected, &self.aliases);
+        let act = print_type(&apply_subst(actual, &self.subst), &self.aliases);
+        self.diag(
+            DiagKind::TypeMismatch,
+            span.clone(),
+            format!("型が一致しません: 期待 {exp}、実際 {act}"),
+            Some(json!({ "path": path, "expected": exp, "actual": act })),
+            Some(Patch::Replace {
+                path: path.to_string(),
+                template: print_type_plain(expected),
+            }),
+            Severity::Error,
+        );
+    }
+
+    fn lit_type(value: &Value) -> Type {
+        match value {
+            Value::Nil => Type::Nil,
+            Value::Num(_) => Type::Number,
+            Value::Str(_) => Type::Str,
+            Value::Bool(_) => Type::Bool,
+            _ => Type::Nil,
+        }
+    }
+
+    fn infer(&mut self, e: &Core, path: &str) -> Type {
+        match e {
+            Core::Lit { value, .. } => Self::lit_type(value),
+            Core::Var { name, span } => {
+                if name.as_ref() == "_" {
+                    self.diag(
+                        DiagKind::UnboundSymbol,
+                        span.clone(),
+                        "'_' に束縛された値は参照できません".to_string(),
+                        Some(json!({ "path": path })),
+                        None,
+                        Severity::Error,
+                    );
+                    return Type::Nil;
+                }
+                match self.lookup_value(name) {
+                    Some(t) => t,
+                    None => {
+                        self.diag(
+                            DiagKind::UnboundSymbol,
+                            span.clone(),
+                            format!("未定義のシンボルです: '{name}'"),
+                            Some(json!({ "path": path })),
+                            None,
+                            Severity::Error,
+                        );
+                        Type::Nil
+                    }
+                }
+            }
+            Core::Lam {
+                params,
+                ret,
+                body,
+                span,
+                ..
+            } => {
+                let ptypes: Vec<Type> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()]))
+                    })
+                    .collect();
+                let ret_t = self.resolve(ret, span, &ast_path(path, &["ret"]));
+                let frame: BTreeMap<Rc<str>, Type> = params
+                    .iter()
+                    .zip(ptypes.iter())
+                    .map(|(p, t)| (p.name.clone(), t.clone()))
+                    .collect();
+                self.scope.push(frame);
+                self.check(body, &ret_t, &ast_path(path, &["body"]));
+                self.scope.pop();
+                Type::FnT(ptypes, Box::new(ret_t))
+            }
+            Core::App { f, args, span, .. } => {
+                if let Core::Var { name, .. } = f.as_ref() {
+                    if let Some((_, kind)) = VARIADIC.iter().find(|(n, _)| *n == name.as_ref()) {
+                        let param = if *kind == "string" {
+                            Type::Str
+                        } else {
+                            self.fresh()
+                        };
+                        for (i, arg) in args.iter().enumerate() {
+                            self.check(arg, &param, &ast_path(path, &["args", &i.to_string()]));
+                        }
+                        return if name.as_ref() == "array" {
+                            Type::Array(Box::new(apply_subst(&param, &self.subst)))
+                        } else {
+                            Type::Str
+                        };
+                    }
+                }
+                let ft = prune(&self.infer(f, &ast_path(path, &["fn"])), &self.subst);
+                let Type::FnT(ft_params, ft_ret) = &ft else {
+                    let want = Type::FnT(
+                        args.iter().map(|_| self.fresh()).collect(),
+                        Box::new(self.fresh()),
+                    );
+                    self.type_mismatch(span, path, &want, &ft);
+                    return Type::Nil;
+                };
+                if ft_params.len() != args.len() {
+                    self.diag(
+                        DiagKind::ArityMismatch,
+                        span.clone(),
+                        format!(
+                            "引数の数が一致しません: 期待 {}、実際 {}",
+                            ft_params.len(),
+                            args.len()
+                        ),
+                        Some(json!({
+                            "path": path,
+                            "expected": ft_params.len(),
+                            "actual": args.len()
+                        })),
+                        Some(Patch::Replace {
+                            path: path.to_string(),
+                            template: print_type_plain(&ft),
+                        }),
+                        Severity::Error,
+                    );
+                    return Type::Nil;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    self.check(arg, &ft_params[i], &ast_path(path, &["args", &i.to_string()]));
+                }
+                apply_subst(ft_ret, &self.subst)
+            }
+            Core::Let {
+                name, rhs, body, ..
+            } => {
+                let t = self.infer(rhs, &ast_path(path, &["rhs"]));
+                self.scope.push(BTreeMap::from([(name.clone(), t)]));
+                let r = self.infer(body, &ast_path(path, &["body"]));
+                self.scope.pop();
+                r
+            }
+            Core::If {
+                cond,
+                then,
+                else_,
+                span,
+            } => {
+                self.check(cond, &Type::Bool, &ast_path(path, &["cond"]));
+                let t1 = self.infer(then, &ast_path(path, &["then"]));
+                let t2 = self.infer(else_, &ast_path(path, &["else"]));
+                if unify(&t1, &t2, &mut self.subst, &self.aliases).is_none() {
+                    self.type_mismatch(span, path, &t1, &t2);
+                }
+                apply_subst(&t1, &self.subst)
+            }
+            Core::Field { obj, name, span } => {
+                let ot = prune(&self.infer(obj, &ast_path(path, &["obj"])), &self.subst);
+                self.field_type(&ot, name, span, path)
+            }
+            Core::Obj { fields, span, .. } => {
+                let mut map: BTreeMap<Rc<str>, Type> = BTreeMap::new();
+                for (i, (name, expr)) in fields.iter().enumerate() {
+                    if map.contains_key(name) {
+                        self.diag(
+                            DiagKind::TypeSyntaxError,
+                            span.clone(),
+                            format!("obj >フィールド '{name}' が重複しています"),
+                            Some(json!({ "path": ast_path(path, &["fields", &i.to_string()]) })),
+                            None,
+                            Severity::Error,
+                        );
+                        continue;
+                    }
+                    let t = self.infer(expr, &ast_path(path, &["fields", &i.to_string()]));
+                    map.insert(name.clone(), t);
+                }
+                Type::Obj(map)
+            }
+            Core::Do { .. } => {
+                let res = Type::ResultT(Box::new(self.fresh()), Box::new(self.fresh()));
+                self.do_check(e, &res, path);
+                apply_subst(&res, &self.subst)
+            }
+            Core::Match { scrutinee, span, .. } => {
+                let st = self.infer(scrutinee, &ast_path(path, &["scrutinee"]));
+                let arms_info = self.collect_match_arms(e, &st, path);
+                let mut result: Option<Type> = None;
+                for (arm_path, binds, body) in arms_info {
+                    self.scope.push(binds);
+                    let bt = self.infer(body, &arm_path);
+                    self.scope.pop();
+                    match &result {
+                        None => result = Some(bt),
+                        Some(r) => {
+                            if unify(r, &bt, &mut self.subst, &self.aliases).is_none() {
+                                self.type_mismatch(span, path, r, &bt);
+                            }
+                        }
+                    }
+                }
+                result.unwrap_or(Type::Nil)
+            }
+            Core::EffectCall {
+                effect,
+                args,
+                span,
+            } => {
+                let Some(sig) = self.effects.get(effect).cloned() else {
+                    self.diag(
+                        DiagKind::UnknownEffect,
+                        span.clone(),
+                        format!("未宣言のエフェクトです: '{effect}!'"),
+                        Some(json!({ "path": path })),
+                        None,
+                        Severity::Error,
+                    );
+                    return Type::Nil;
+                };
+                let f = prune(&sig, &self.subst);
+                let Type::FnT(f_params, f_ret) = &f else {
+                    let want = Type::FnT(
+                        args.iter().map(|_| self.fresh()).collect(),
+                        Box::new(self.fresh()),
+                    );
+                    self.type_mismatch(span, path, &want, &f);
+                    return Type::Nil;
+                };
+                if f_params.len() != args.len() {
+                    self.diag(
+                        DiagKind::ArityMismatch,
+                        span.clone(),
+                        format!(
+                            "エフェクト '{effect}!' >引数の数が一致しません: 期待 {}、実際 {}",
+                            f_params.len(),
+                            args.len()
+                        ),
+                        Some(json!({
+                            "path": path,
+                            "expected": f_params.len(),
+                            "actual": args.len()
+                        })),
+                        None,
+                        Severity::Error,
+                    );
+                    return Type::Nil;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    self.check(arg, &f_params[i], &ast_path(path, &["args", &i.to_string()]));
+                }
+                apply_subst(f_ret, &self.subst)
+            }
+            Core::Error { message, span } => {
+                self.diag(
+                    DiagKind::ParseError,
+                    span.clone(),
+                    message.clone(),
+                    Some(json!({ "path": path })),
+                    None,
+                    Severity::Error,
+                );
+                Type::Nil
+            }
+        }
+    }
+
+    fn check(&mut self, e: &Core, expected: &Type, path: &str) {
+        let exp = prune(expected, &self.subst);
+        match e {
+            Core::Lam {
+                params,
+                ret,
+                body,
+                span,
+                ..
+            } => {
+                let ptypes: Vec<Type> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()]))
+                    })
+                    .collect();
+                if let Type::FnT(exp_params, exp_ret) = &exp {
+                    if exp_params.len() == params.len() {
+                        for (i, pt) in ptypes.iter().enumerate() {
+                            if unify(pt, &exp_params[i], &mut self.subst, &self.aliases).is_none() {
+                                self.type_mismatch(
+                                    span,
+                                    &ast_path(path, &["params", &i.to_string()]),
+                                    &exp_params[i],
+                                    pt,
+                                );
+                            }
+                        }
+                        let frame: BTreeMap<Rc<str>, Type> = params
+                            .iter()
+                            .zip(exp_params.iter())
+                            .map(|(p, t)| (p.name.clone(), t.clone()))
+                            .collect();
+                        self.scope.push(frame);
+                        self.check(body, exp_ret, &ast_path(path, &["body"]));
+                        self.scope.pop();
+                        return;
+                    }
+                }
+                let _ = ret;
+                let t = self.infer(e, path);
+                if unify(&t, expected, &mut self.subst, &self.aliases).is_none() {
+                    self.type_mismatch(span, path, expected, &t);
+                }
+            }
+            Core::If { cond, then, else_, .. } => {
+                self.check(cond, &Type::Bool, &ast_path(path, &["cond"]));
+                self.check(then, expected, &ast_path(path, &["then"]));
+                self.check(else_, expected, &ast_path(path, &["else"]));
+            }
+            Core::Let { name, rhs, body, .. } => {
+                let t = self.infer(rhs, &ast_path(path, &["rhs"]));
+                self.scope.push(BTreeMap::from([(name.clone(), t)]));
+                self.check(body, expected, &ast_path(path, &["body"]));
+                self.scope.pop();
+            }
+            Core::Do { .. } => self.do_check(e, expected, path),
+            Core::Match { scrutinee, .. } => {
+                let st = self.infer(scrutinee, &ast_path(path, &["scrutinee"]));
+                let arms_info = self.collect_match_arms(e, &st, path);
+                for (arm_path, binds, body) in arms_info {
+                    self.scope.push(binds);
+                    self.check(body, expected, &arm_path);
+                    self.scope.pop();
+                }
+            }
+            _ => {
+                let t = self.infer(e, path);
+                if unify(&t, expected, &mut self.subst, &self.aliases).is_none() {
+                    self.type_mismatch(e.span(), path, expected, &t);
+                }
+            }
+        }
+    }
+
+    fn do_check(&mut self, e: &Core, expected: &Type, path: &str) {
+        let Core::Do {
+            binds,
+            body,
+            span,
+            ..
+        } = e
+        else {
+            return;
+        };
+        let mut exp = prune(expected, &self.subst);
+        if matches!(exp, Type::Alias(_)) {
+            exp = prune(&normalize_type(&exp, &self.aliases), &self.subst);
+        }
+        if let Type::Var(id) = &exp {
+            let id = *id;
+            let r = Type::ResultT(Box::new(self.fresh()), Box::new(self.fresh()));
+            if self.subst.len() <= id {
+                self.subst.resize(id + 1, None);
+            }
+            self.subst[id] = Some(r);
+            exp = prune(expected, &self.subst);
+        }
+        let Type::ResultT(_, err_t) = &exp else {
+            let want = Type::ResultT(Box::new(self.fresh()), Box::new(self.fresh()));
+            self.type_mismatch(span, path, &want, expected);
+            return;
+        };
+        let err_t = (**err_t).clone();
+        self.scope.push(BTreeMap::new());
+        for (i, b) in binds.iter().enumerate() {
+            let bind_path = ast_path(path, &["binds", &i.to_string()]);
+            let ti = prune(&self.infer(&b.expr, &bind_path), &self.subst);
+            if !matches!(ti, Type::ResultT(_, _)) {
+                let want = Type::ResultT(Box::new(self.fresh()), Box::new(err_t.clone()));
+                self.type_mismatch(span, &bind_path, &want, &ti);
+                continue;
+            }
+            let Type::ResultT(ok_t, _) = &ti else {
+                continue;
+            };
+            let ok_t = (**ok_t).clone();
+            let want = Type::ResultT(Box::new(ok_t.clone()), Box::new(err_t.clone()));
+            if unify(&ti, &want, &mut self.subst, &self.aliases).is_none() {
+                self.type_mismatch(span, &bind_path, &want, &ti);
+            }
+            if b.name.as_ref() != "_" {
+                let bound = apply_subst(&ok_t, &self.subst);
+                if let Some(frame) = self.scope.last_mut() {
+                    frame.insert(b.name.clone(), bound);
+                }
+            }
+        }
+        self.check(body, &exp, &ast_path(path, &["body"]));
+        self.scope.pop();
+    }
+
+    fn collect_match_arms<'c>(
+        &mut self,
+        e: &'c Core,
+        st: &Type,
+        path: &str,
+    ) -> MatchArms<'c> {
+        let Core::Match { arms, span, .. } = e else {
+            return Vec::new();
+        };
+        let s = prune(st, &self.subst);
+        let mut remaining: Option<Vec<Type>> = match &s {
+            Type::Union(m) => Some(m.clone()),
+            _ => None,
+        };
+        let mut out = Vec::new();
+        for (i, arm) in arms.iter().enumerate() {
+            let arm_path = ast_path(path, &["arms", &i.to_string()]);
+            let mut target = s.clone();
+            if let Some(rem) = &mut remaining {
+                if matches!(arm.pattern.kind, PatKind::Var(_) | PatKind::Wildcard) {
+                    target = Type::Union(normalize_union(rem.clone(), &self.aliases));
+                    rem.clear();
+                } else {
+                    let hit = rem.iter().position(|m| {
+                        self.match_pattern(&arm.pattern, m, true, span, &arm_path)
+                            .is_some()
+                    });
+                    match hit {
+                        Some(h) => {
+                            target = rem.remove(h);
+                        }
+                        None => {
+                            rem.clear();
+                        }
+                    }
+                }
+            }
+            let binds = self
+                .match_pattern(&arm.pattern, &target, false, span, &arm_path)
+                .unwrap_or_default();
+            out.push((arm_path, binds, &arm.body));
+        }
+        out
+    }
+
+    fn match_pattern(
+        &mut self,
+        p: &crate::ir::Pat,
+        scrut: &Type,
+        quiet: bool,
+        span: &Span,
+        path: &str,
+    ) -> Option<BTreeMap<Rc<str>, Type>> {
+        let s = prune(scrut, &self.subst);
+        match &p.kind {
+            PatKind::Wildcard => Some(BTreeMap::new()),
+            PatKind::Var(name) => Some(BTreeMap::from([(name.clone(), s)])),
+            PatKind::Lit(value) => {
+                let pt = match value {
+                    Value::Nil => Type::Nil,
+                    Value::Str(sv) => Type::Literal(sv.clone()),
+                    Value::Num(_) => Type::Number,
+                    Value::Bool(_) => Type::Bool,
+                    _ => Type::Nil,
+                };
+                if unify(&pt, &s, &mut self.subst, &self.aliases).is_none() {
+                    if !quiet {
+                        self.type_mismatch(span, path, &pt, &s);
+                    }
+                    return None;
+                }
+                Some(BTreeMap::new())
+            }
+            PatKind::Obj(fields) => {
+                let Type::Obj(sf) = &s else {
+                    let want = Type::Obj(
+                        fields
+                            .iter()
+                            .map(|(n, _)| (n.clone(), self.fresh()))
+                            .collect(),
+                    );
+                    if !quiet {
+                        self.type_mismatch(span, path, &want, &s);
+                    }
+                    return None;
+                };
+                let mut binds = BTreeMap::new();
+                for (name, sub) in fields {
+                    let Some(ft) = sf.get(name) else {
+                        let want = Type::Obj(BTreeMap::from([(name.clone(), self.fresh())]));
+                        if !quiet {
+                            self.type_mismatch(span, path, &want, &s);
+                        }
+                        return None;
+                    };
+                    let sub_path = ast_path(path, &[name.as_ref()]);
+                    let sub_binds = self.match_pattern(sub, ft, quiet, span, &sub_path)?;
+                    binds.extend(sub_binds);
+                }
+                Some(binds)
+            }
+            PatKind::Array(elements) => {
+                let Type::Array(el) = &s else {
+                    let want = Type::Array(Box::new(self.fresh()));
+                    if !quiet {
+                        self.type_mismatch(span, path, &want, &s);
+                    }
+                    return None;
+                };
+                let mut binds = BTreeMap::new();
+                for el_pat in elements {
+                    let sub_binds = self.match_pattern(el_pat, el, quiet, span, path)?;
+                    binds.extend(sub_binds);
+                }
+                Some(binds)
+            }
+            PatKind::Or(patterns) => {
+                for sub in patterns {
+                    if let Some(b) = self.match_pattern(sub, &s, true, span, path) {
+                        return Some(b);
+                    }
+                }
+                if !quiet {
+                    self.type_mismatch(span, path, &s, &s);
+                }
+                None
+            }
+        }
+    }
+
+    fn field_type(&mut self, ot: &Type, name: &str, span: &Span, path: &str) -> Type {
+        if let Type::Union(members) = ot {
+            let mut types: Vec<Type> = Vec::new();
+            for m in members {
+                if let Type::Obj(fields) = m {
+                    if let Some(ft) = fields.get(name) {
+                        types.push(ft.clone());
+                        continue;
+                    }
+                }
+                self.diag(
+                    DiagKind::TypeMismatch,
+                    span.clone(),
+                    format!("フィールド '{name}' が {} にはありません", print_type(m, &self.aliases)),
+                    Some(json!({ "path": path })),
+                    None,
+                    Severity::Error,
+                );
+            }
+            if types.is_empty() {
+                return Type::Nil;
+            }
+            return if types.len() == 1 {
+                types[0].clone()
+            } else {
+                Type::Union(normalize_union(types, &self.aliases))
+            };
+        }
+        if let Type::Obj(fields) = ot {
+            if let Some(ft) = fields.get(name) {
+                return ft.clone();
+            }
+        }
+        let want = Type::Obj(BTreeMap::from([(Rc::from(name), self.fresh())]));
+        self.type_mismatch(span, path, &want, ot);
+        Type::Nil
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_src(src: &str) -> ModuleResult {
+        let mut cache = ModuleCache::default();
+        check_source(src, "test.lts", &mut cache)
+    }
+
+    fn fixture_path(name: &str) -> String {
+        format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), name)
+    }
+
+    #[test]
+    fn simple_defn_checks_clean() {
+        let r = check_src("(defn f (x : number) : number (+ x 1))");
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+        let t = type_of_all(&r);
+        assert_eq!(t["f"], "(fn (number) : number)");
+    }
+
+    #[test]
+    fn failure_ok_string_against_number() {
+        let r = check_src("(defn f () : number (ok \"a\"))");
+        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+        let d = &r.diagnostics[0];
+        assert_eq!(d.kind, DiagKind::TypeMismatch);
+        let data = d.data.as_ref().expect("data");
+        assert_eq!(data["expected"], "number");
+        assert_eq!(data["path"], "(defn f).body");
+        let actual = data["actual"].as_str().expect("actual");
+        assert!(actual.contains("(Result string"), "{actual}");
+        assert!(matches!(&d.fix, Some(Patch::Replace { path, template }) if path == "(defn f).body" && template == "number"));
+    }
+
+    #[test]
+    fn unbound_symbol() {
+        let r = check_src("(defn f () : number g)");
+        assert!(r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagKind::UnboundSymbol && d.message.contains("'g'")));
+    }
+
+    #[test]
+    fn duplicate_definition_in_value_namespace() {
+        let r = check_src("(defn f () : number 1)\n(defn f () : number 2)");
+        assert!(r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagKind::DuplicateDefinition));
+    }
+
+    #[test]
+    fn type_and_value_namespaces_are_separate() {
+        let r = check_src(
+            "(type Money (obj (amount : number)))\n(defn money () : Money (obj (amount 1)))",
+        );
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn arity_mismatch() {
+        let r = check_src("(defn f () : number (+ 1))");
+        let d = r
+            .diagnostics
+            .iter()
+            .find(|d| d.kind == DiagKind::ArityMismatch)
+            .expect("arity-mismatch");
+        let data = d.data.as_ref().expect("data");
+        assert_eq!(data["expected"], 2);
+        assert_eq!(data["actual"], 1);
+    }
+
+    #[test]
+    fn type_syntax_error_unknown_alias() {
+        let r = check_src("(defn f () : Foo 1)");
+        assert!(r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagKind::TypeSyntaxError && d.message.contains("Foo")));
+    }
+
+    #[test]
+    fn do_is_check_mode_only() {
+        let r = check_src("(defn f () : number (do [_ (ok 1)] (ok 2)))");
+        assert!(r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagKind::TypeMismatch));
+    }
+
+    #[test]
+    fn do_bind_error_type_unifies_against_expected_e() {
+        let r = check_src("(defn f () : (Result number string) (do [_ (err 1)] (ok 2)))");
+        assert!(r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagKind::TypeMismatch));
+    }
+
+    #[test]
+    fn appendix_a_fixtures_check_clean() {
+        for name in ["money.lts", "cart.lts"] {
+            let mut cache = ModuleCache::default();
+            let r = check_file(&fixture_path(name), &mut cache);
+            assert!(r.diagnostics.is_empty(), "{name}: {:?}", r.diagnostics);
+        }
+    }
+
+    #[test]
+    fn place_order_do_unifies_place_error() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("cart.lts"), &mut cache);
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+        let t = type_of_all(&r);
+        let place = t["place-order"].clone();
+        assert!(place.contains("(union (obj (id : string) (tag \"NegativeQty\")) (obj (tag \"EmptyCart\")) string)"), "{place}");
+    }
 }
