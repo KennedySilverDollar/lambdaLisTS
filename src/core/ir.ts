@@ -1,24 +1,8 @@
 import type { Span } from "../lexer/token.js";
+import type { Value } from "../interp/value.js";
 import type { Type } from "../types/type.js";
 
-export type Value =
-  | number
-  | string
-  | boolean
-  | null
-  | Value[]
-  | { [key: string]: Value }
-  | { tag: "Ok"; value: Value }
-  | { tag: "Err"; value: Value }
-  | Closure;
-
-export interface Closure {
-  params: Param[];
-  ret: Type;
-  body: Core;
-  env: Map<string, Value>;
-  name: string | null;
-}
+export type { Closure, Value } from "../interp/value.js";
 
 export type Core =
   | { k: "Lit"; value: Value; span: Span }
