@@ -59,11 +59,45 @@ export interface EmitInput {
 
 export type EmitResult = { js: string; map: string } | { errors: Diagnostic[] };
 
+function containsErrorNode(e: Core): boolean {
+  switch (e.k) {
+    case "Error":
+      return true;
+    case "Lam":
+      return containsErrorNode(e.body);
+    case "App":
+      return containsErrorNode(e.fn) || e.args.some(containsErrorNode);
+    case "Let":
+      return containsErrorNode(e.rhs) || containsErrorNode(e.body);
+    case "If":
+      return containsErrorNode(e.cond) || containsErrorNode(e.then) || containsErrorNode(e.else);
+    case "Match":
+      return containsErrorNode(e.scrutinee) || e.arms.some((a) => containsErrorNode(a.body));
+    case "Obj":
+      return e.fields.some(([, c]) => containsErrorNode(c));
+    case "Field":
+      return containsErrorNode(e.obj);
+    case "Do":
+      return e.binds.some((b) => containsErrorNode(b.expr)) || containsErrorNode(e.body);
+    default:
+      return false;
+  }
+}
+
 export function emit(input: EmitInput): EmitResult {
   const errors: Diagnostic[] = [];
   for (const d of input.defs) {
     if (d.k === "error") {
       errors.push({ kind: "parse-error", severity: "error", span: d.span, message: d.message, data: { path: d.path } });
+    }
+    if (d.k === "defn" && containsErrorNode(d.body)) {
+      errors.push({
+        kind: "parse-error",
+        severity: "error",
+        span: d.span,
+        message: `フォーム '${d.name}' にパースエラーの回復ノードが含まれます`,
+        data: { path: d.path },
+      });
     }
     if (d.k === "defn" && !d.pure) {
       errors.push({
