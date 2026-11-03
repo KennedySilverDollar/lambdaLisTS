@@ -130,8 +130,93 @@ docs/         README.md（詳細・実測値・既知の差異）
 
 詳細な説明・既知の差異は [docs/README.md](docs/README.md) を参照してください。
 
-## Rust 版（P0 移植の進行中）
+## Rust 版（P0 移植 — M0〜M10 完了）
 
-Rust 実装はルートの `Cargo.toml`（`cargo build` / `cargo test`）。現時点の進捗: M0 スキャフォールド〜M7（レキサ・パーサ・脱糖・双方向型検査・網羅性検査・エフェクト/モジュール検査・Core IR インタープリタ）まで完了。
+Rust 版コンパイラはルートの `Cargo.toml` / `src/*.rs` にあります（GUIDE.md §4 の構成）。TypeScript 版（上）と同じ SPEC.md v0.2 (P0) を実装対象にしています。
 
+### ビルド・テスト
+
+```sh
+cargo build                              # 単一バイナリ `lists` を生成（外部ランタイム不要）
+cargo test                               # 全テスト（162件: lib 137 + acceptance 7 + golden 6 + backend 6 + tools 5 + smoke 1）
+cargo clippy --all-targets -- -D warnings   # 警告ゼロを維持
+UPDATE_SNAPSHOTS=1 cargo test            # tests/golden/ のスナップショットを再生成（GUIDE §6）
+```
+
+生成JSの実行検証（T1/T4/T7/T8）には Node.js >= 20 が必要です（テスト内で `node` を呼び出します）。
+
+### 使い方（§10.5、TS 版と同じ semantics）
+
+```sh
+cargo run -- compile tests/fixtures/money.lts tests/fixtures/cart.lts --out /tmp/out   # 診断は Diagnostic[] JSON を stdout、exit 0/1
+node /tmp/out/cart.js                                                                    # 生成JSを実行（example を検証）: example 0: ok {"tag":"Err","value":{"tag":"EmptyCart"}}
+cargo run -- fmt tests/fixtures/money.lts                                                # in-place 一意フォーマット（冪等）
+cargo run -- repl                                                                        # JSON Lines REPL（§10.1）
+```
+
+```json
+{"id": 1, "op": "eval", "src": "(defn add (a : number) (b : number) : number (+ a b))"}
+{"id": 2, "op": "test"}
+{"id": 3, "op": "prop", "name": "add-money commutative"}
+{"id": 5, "op": "type-of", "src": "add"}
+{"id": 6, "op": "quit"}
+```
+
+### 構成（GUIDE.md §4）
+
+```
+Cargo.toml          edition 2021 / serde(derive+rc), serde_json, thiserror, clap(derive), sourcemap
+src/
+  main.rs           CLI エントリ（clap: compile / fmt / repl）
+  lib.rs            pub mod 宣言（#![forbid(unsafe_code)]）
+  span.rs           Span（バイト位置 + 1始まり line/Unicodeスカラ col）
+  diagnostic.rs     Diagnostic/Patch/DiagKind（serde JSON）、AST パスヘルパー（§10.2）
+  token.rs lexer.rs §2 字句（最長一致・コメントは trivia・error トークン）
+  ast.rs parser.rs  §3 構文（全ノードに span+trivia、ベストエフォート回復 §9.4）
+  ir.rs desugar.rs  §5 Core IR と §4 脱糖（決定的）
+  types.rs unify.rs check.rs stdlib.rs exhaustive.rs   §6/§11 型検査（双方向・unify・網羅性）
+  effects.rs resolver.rs                               §7 エフェクト検査・§3.8 モジュール解決
+  value.rs eval.rs  §8 Value/インタープリタ（do 早期リターン・呼び出し統計・深さ上限）
+  emit.rs runtime.rs sourcemap_out.rs backend/runtime.js  §12 JS 生成 + source map v3 + runtime.js
+  fmt.rs repl.rs    §10.3 フォーマッタ / §10.1 JSON Lines REPL
+tests/
+  smoke.rs golden.rs backend.rs tools.rs     統合テスト（golden は tests/golden/）
+  acceptance/       T1–T7 受け入れ（diff.rs は interp と node の差分一致）
+  fixtures/         付録A/B + mod-*/cart-spy の .lts
+```
+
+### 進捗（マイルストーン）
+
+| M | 内容 | 状態 |
+|---|---|---|
+| M0 | スキャフォールド（Cargo + モジュールスタブ + CLI 骨格） | ✅ |
+| M1 | レキサ（§2） | ✅ |
+| M2 | パーサ（§3、回復 §9.4） | ✅ |
+| M3 | 脱糖 Surface → Core IR（§4/§5） | ✅ |
+| M4 | 双方向型検査（§6.1–6.4、§11 stdlib） | ✅ |
+| M5 | 網羅性検査（§6.5、non-exhaustive/redundant-arm + fix） | ✅ |
+| M6 | エフェクト検査（§7）・モジュール解決（§3.8） | ✅ |
+| M7 | Core IR インタープリタ（§8、呼び出し統計・深さ上限） | ✅ |
+| M8 | JS コード生成 + source map v3 + runtime.js（§12） | ✅ |
+| M9 | CLI / REPL / fmt（§10） | ✅ |
+| M10 | interp↔JS 差分ハーネス（T7）＋ 受け入れ T1–T7 | ✅ |
+
+### 受け入れテスト（Rust 版、SPEC §13）
+
+| テスト | 内容 | 状態 |
+|---|---|---|
+| T1 | 純粋関数 + Result（add-money の JS 実行値） | ✅ tests/acceptance |
+| T2 | 網羅性検査（stock.lts non-exhaustive + fix、診断JSONゴールデン） | ✅ tests/acceptance |
+| T3 | do 早期リターン（total 未呼び出し: interp 統計 + JS スパイ） | ✅ tests/acceptance |
+| T4 | モジュール（import 型検査/実行一致、cycle エラー） | ✅ tests/acceptance |
+| T5 | パース回復（broken.lts） | ✅ tests/acceptance |
+| T6 | エフェクト違反（effects.lts、検査のみ + fix） | ✅ tests/acceptance |
+| T7 | インタープリタと JS バックエンドの差分一致 | ✅ tests/acceptance/diff.rs |
+| T8 | source map（深い再帰のスタックが .lts 行を指す） | ✅ tests/backend.rs |
+| T9 | REPL JSON 往復（ゴールデン） | ✅ tests/tools.rs |
+
+### 既知の制限（P0 の範囲内）
+
+- `defn!` は検査のみ受理（JS 生成時は `unsupported-in-p0` エラー、§7.5）。`prop` 評価も P1（REPL は `unsupported-in-p0` を返す）。
 - Rust インタープリタの再帰深さ上限は `src/eval.rs` の `MAX_CALL_DEPTH = 10000` です（SPEC §8.5）。上限超過時はパニックせず `internal-error` を返します。
+- 生成 JS の number は IEEE754 binary64（Rust `f64` と同一、§8.6）。`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN です。
