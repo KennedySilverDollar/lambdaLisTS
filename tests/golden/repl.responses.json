@@ -1,0 +1,75 @@
+[
+  {
+    "defined": "add",
+    "id": 1,
+    "ok": true,
+    "type": "(fn (number number) : number)"
+  },
+  {
+    "id": 2,
+    "ok": true,
+    "results": []
+  },
+  {
+    "errors": [
+      {
+        "kind": "unsupported-in-p0",
+        "message": "prop評価はP1で実装"
+      }
+    ],
+    "id": 3,
+    "ok": false
+  },
+  {
+    "id": 4,
+    "ok": true
+  },
+  {
+    "id": 5,
+    "ok": true,
+    "type": "(fn (number number) : number)"
+  },
+  {
+    "id": 6,
+    "ok": true,
+    "type": "(fn ((Array (obj (id : string) (price : (obj (amount : number) (currency : string))) (qty : number)))) : (Result (obj (amount : number) (currency : string)) (union (obj (id : string) (tag \"NegativeQty\")) (obj (tag \"EmptyCart\")) string)))"
+  },
+  {
+    "id": 7,
+    "ok": true,
+    "results": [
+      {
+        "example": "example 0",
+        "pass": true
+      }
+    ]
+  },
+  {
+    "errors": [
+      {
+        "data": {
+          "actual": "(Result string ?23)",
+          "expected": "number",
+          "path": "(defn f).body"
+        },
+        "fix": {
+          "op": "replace",
+          "path": "(defn f).body",
+          "template": "number"
+        },
+        "kind": "type-mismatch",
+        "message": "型が一致しません: 期待 number、実際 (Result string ?23)",
+        "severity": "error",
+        "span": {
+          "col": 21,
+          "end": 28,
+          "file": "repl.lts",
+          "line": 1,
+          "start": 20
+        }
+      }
+    ],
+    "id": 8,
+    "ok": false
+  }
+]

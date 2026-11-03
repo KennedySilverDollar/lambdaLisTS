@@ -44,7 +44,18 @@ pub fn new_module_cache() -> ModuleCache {
 }
 
 pub fn check_program(defs: &[CoreDef], file: &str, cache: &mut ModuleCache) -> ModuleResult {
-    Checker::new(file, cache).run(defs)
+    let mut checker = Checker::new(file, cache);
+    checker.run(defs)
+}
+
+pub fn create_context<'a>(
+    defs: &[CoreDef],
+    file: &'a str,
+    cache: &'a mut ModuleCache,
+) -> (ModuleResult, Checker<'a>) {
+    let mut checker = Checker::new(file, cache);
+    let result = checker.run(defs);
+    (result, checker)
 }
 
 pub fn check_source(src: &str, file: &str, cache: &mut ModuleCache) -> ModuleResult {
@@ -94,7 +105,7 @@ const VARIADIC: &[(&str, &str)] = &[("str-concat", "string"), ("array", "fresh")
 
 type MatchArms<'c> = Vec<(String, BTreeMap<Rc<str>, Type>, &'c Core)>;
 
-struct Checker<'a> {
+pub struct Checker<'a> {
     file: &'a str,
     cache: &'a mut ModuleCache,
     diagnostics: Vec<Diagnostic>,
@@ -108,7 +119,7 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-    fn new(file: &'a str, cache: &'a mut ModuleCache) -> Self {
+    pub fn new(file: &'a str, cache: &'a mut ModuleCache) -> Self {
         Checker {
             file,
             cache,
@@ -123,7 +134,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn run(mut self, defs: &[CoreDef]) -> ModuleResult {
+    pub fn run(&mut self, defs: &[CoreDef]) -> ModuleResult {
         let mut exports: Vec<Rc<str>> = Vec::new();
         for d in defs {
             if let CoreDef::Type {
@@ -227,10 +238,10 @@ impl<'a> Checker<'a> {
         }
         self.diagnostics.extend(check_effects(defs));
         ModuleResult {
-            diagnostics: self.diagnostics,
-            value_types: self.values,
-            type_aliases: self.aliases,
-            effects: self.effects,
+            diagnostics: self.diagnostics.clone(),
+            value_types: self.values.clone(),
+            type_aliases: self.aliases.clone(),
+            effects: self.effects.clone(),
             exports,
         }
     }
@@ -447,7 +458,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer(&mut self, e: &Core, path: &str) -> Type {
+    pub fn infer(&mut self, e: &Core, path: &str) -> Type {
         match e {
             Core::Lit { value, .. } => Self::lit_type(value),
             Core::Var { name, span } => {

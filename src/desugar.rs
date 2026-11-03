@@ -611,6 +611,10 @@ impl Desugarer {
     }
 }
 
+pub fn desugar_expr(e: &crate::ast::Expr) -> Core {
+    Desugarer::default().expr(e, "(expr)")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

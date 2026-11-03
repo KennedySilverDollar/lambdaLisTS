@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ir::{Pat as CorePat, PatKind};
 use crate::span::Span;
 use crate::token::Trivia;
@@ -37,7 +39,7 @@ pub fn print_pattern(p: &CorePat) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LitValue {
     Num(f64),
     Str(Rc<str>),
@@ -45,7 +47,7 @@ pub enum LitValue {
     Nil,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prim {
     Number,
     Str,
@@ -53,7 +55,7 @@ pub enum Prim {
     Nil,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub forms: Vec<TopForm>,
     pub trailing: Trivia,
@@ -61,7 +63,7 @@ pub struct Program {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TopForm {
     Import {
         path: Rc<str>,
@@ -130,7 +132,7 @@ impl TopForm {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     pub name: Rc<str>,
     pub ty: TypeExpr,
@@ -138,7 +140,7 @@ pub struct Param {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExpr {
     Prim {
         name: Prim,
@@ -199,7 +201,7 @@ impl TypeExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeField {
     Field {
         name: Rc<str>,
@@ -215,7 +217,7 @@ pub enum TypeField {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Lit {
         value: LitValue,
@@ -336,7 +338,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bind {
     pub name: Rc<str>,
     pub expr: Box<Expr>,
@@ -344,7 +346,7 @@ pub struct Bind {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CondArm {
     pub cond: Box<Expr>,
     pub body: Box<Expr>,
@@ -352,7 +354,7 @@ pub struct CondArm {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchArm {
     pub pattern: Pat,
     pub body: Box<Expr>,
@@ -360,7 +362,7 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoBind {
     pub name: Rc<str>,
     pub expr: Box<Expr>,
@@ -368,7 +370,7 @@ pub struct DoBind {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObjField {
     pub name: Rc<str>,
     pub expr: Box<Expr>,
@@ -376,7 +378,7 @@ pub struct ObjField {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Pat {
     Wildcard {
         trivia: Trivia,
@@ -422,7 +424,7 @@ impl Pat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PatField {
     pub name: Rc<str>,
     pub pattern: Box<Pat>,

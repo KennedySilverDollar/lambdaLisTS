@@ -7,7 +7,7 @@ use crate::ast::{
     TopForm, TypeExpr, TypeField,
 };
 use crate::diagnostic::{DiagKind, Diagnostic, Patch, Severity};
-use crate::lexer::LexResult;
+use crate::lexer::{tokenize, LexResult};
 use crate::span::Span;
 use crate::token::{Token, TokenKind, TokenValue, Trivia};
 
@@ -1890,6 +1890,16 @@ impl<'a> Parser<'a> {
             }
         }
     }
+}
+
+pub fn parse_expr(src: &str, file: &str) -> (Option<Expr>, Vec<Diagnostic>) {
+    let lex = tokenize(src, file);
+    let mut parser = Parser::new(&lex.tokens);
+    let raws = parser.read_all();
+    let expr = raws.first().map(|r| parser.build_expr(r, "(expr)"));
+    let mut diags = lex.diagnostics.clone();
+    diags.extend(parser.diagnostics);
+    (expr, diags)
 }
 
 #[cfg(test)]
