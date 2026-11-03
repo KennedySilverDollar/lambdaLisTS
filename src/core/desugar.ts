@@ -2,7 +2,7 @@ import { astPath, topFormPath } from "../diagnostic.js";
 import type { Diagnostic } from "../diagnostic.js";
 import type { Span } from "../lexer/token.js";
 import type * as ast from "../parser/ast.js";
-import type { Type } from "../types.js";
+import type { Type } from "../types/type.js";
 import type { Core, MatchArm, Param, Pattern, Value } from "./ir.js";
 
 export type CoreTopForm =

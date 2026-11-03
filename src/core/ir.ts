@@ -1,5 +1,5 @@
 import type { Span } from "../lexer/token.js";
-import type { Type } from "../types.js";
+import type { Type } from "../types/type.js";
 
 export type Value =
   | number
