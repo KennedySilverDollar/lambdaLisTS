@@ -1,4 +1,24 @@
+import type { Pattern as CorePattern } from "../core/ir.js";
 import type { Span } from "../lexer/token.js";
+
+export function printPattern(p: CorePattern): string {
+  switch (p.k) {
+    case "wildcard":
+      return "_";
+    case "var":
+      return p.name;
+    case "lit":
+      if (p.value === null) return "nil";
+      if (typeof p.value === "string") return JSON.stringify(p.value);
+      return String(p.value);
+    case "obj":
+      return `(obj ${p.fields.map(([n, sub]) => `(${n} ${printPattern(sub)})`).join(" ")})`;
+    case "array":
+      return `(Array ${p.elements.map(printPattern).join(" ")})`;
+    case "or":
+      return `(or ${p.patterns.map(printPattern).join(" ")})`;
+  }
+}
 
 export interface Trivia {
   leading: string[];

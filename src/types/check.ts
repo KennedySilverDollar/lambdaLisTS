@@ -6,7 +6,9 @@ import type { Core, Pattern, Value } from "../core/ir.js";
 import type { Diagnostic } from "../diagnostic.js";
 import type { Span } from "../lexer/token.js";
 import { tokenize } from "../lexer/lexer.js";
+import { printPattern } from "../parser/ast.js";
 import { parseProgram } from "../parser/parser.js";
+import { checkExhaustive } from "./exhaustive.js";
 import { applySubst, prune, unify, type Subst } from "./unify.js";
 import {
   findUnresolvedAlias,
@@ -237,8 +239,8 @@ class Checker {
     return n;
   }
 
-  private diag(kind: string, span: Span, message: string, data?: object, fix?: Diagnostic["fix"]): void {
-    this.diagnostics.push({ kind, severity: "error", span, message, data, fix });
+  private diag(kind: string, span: Span, message: string, data?: object, fix?: Diagnostic["fix"], severity: "error" | "warning" = "error"): void {
+    this.diagnostics.push({ kind, severity, span, message, data, fix });
   }
 
   private typeMismatch(span: Span, path: string, expected: Type, actual: Type): void {
@@ -472,6 +474,27 @@ class Checker {
     visit: (armPath: string, binds: Map<string, Type>, body: Core) => void,
   ): void {
     const s = prune(scrutinee, this.subst);
+    const ex = checkExhaustive(s, e.arms.map((a) => a.pattern), this.subst, this.aliases);
+    if (ex.missing.length > 0) {
+      const missingStr = ex.missing.map(printPattern);
+      this.diag(
+        "non-exhaustive",
+        e.span,
+        `match が網羅的ではありません。不足パターン: ${missingStr.join(", ")}`,
+        { path, missing: missingStr },
+        { op: "insert", path: `${path}.arms`, template: ex.missing.map((m) => `[${printPattern(m)} "..."]`).join(" ") },
+      );
+    }
+    for (const i of ex.redundant) {
+      this.diag(
+        "redundant-arm",
+        e.arms[i].body.span,
+        `アーム ${i} は到達不能です（冗長アーム）`,
+        { path: `${path}.arms.${i}`, arm: i },
+        { op: "delete", path: `${path}.arms.${i}` },
+        "warning",
+      );
+    }
     let remaining: Type[] | null = s.k === "union" ? [...s.members] : null;
     for (let i = 0; i < e.arms.length; i++) {
       const arm = e.arms[i];
