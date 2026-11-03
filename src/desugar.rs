@@ -67,6 +67,21 @@ pub fn desugar(program: &Program) -> (Vec<CoreDef>, Vec<Diagnostic>) {
     Desugarer::default().run(program)
 }
 
+impl CoreDef {
+    pub fn span(&self) -> &Span {
+        match self {
+            CoreDef::Defn { span, .. }
+            | CoreDef::Type { span, .. }
+            | CoreDef::Effect { span, .. }
+            | CoreDef::Prop { span, .. }
+            | CoreDef::Example { span, .. }
+            | CoreDef::Import { span, .. }
+            | CoreDef::Export { span, .. }
+            | CoreDef::Error { span, .. } => span,
+        }
+    }
+}
+
 fn lit_value(v: &LitValue) -> Value {
     match v {
         LitValue::Num(n) => Value::Num(*n),
