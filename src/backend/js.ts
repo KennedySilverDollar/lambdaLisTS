@@ -2,7 +2,7 @@ import type { CoreTopForm } from "../core/desugar.js";
 import type { Core, Pattern, Value } from "../core/ir.js";
 import type { Diagnostic } from "../diagnostic.js";
 import { stdlibSchemes } from "../types/stdlib.js";
-import { createEmitter } from "./sourcemap.js";
+import { createEmitter, injectFunctionNames } from "./sourcemap.js";
 
 const JS_RESERVED = new Set([
   "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do",
@@ -125,7 +125,7 @@ export function emit(input: EmitInput): EmitResult {
   if (cursor < input.source.length) emitter.remove(cursor, input.source.length);
   emitter.prepend(gen.header());
   const js = `${emitter.toString()}\n//# sourceMappingURL=${input.file}.map\n`;
-  const map = emitter.map(input.file, input.sourceFile);
+  const map = injectFunctionNames(js, emitter.map(input.file, input.sourceFile), gen.functionNames);
   return { js, map };
 }
 
@@ -135,6 +135,7 @@ class Gen {
   private stdlibUsed = new Set<string>();
   private freshCounter = 0;
   private exampleIndex = 0;
+  readonly functionNames: { js: string; original: string }[] = [];
 
   constructor(private defs: CoreTopForm[], private typeNames: Set<string>) {
     for (const d of defs) {
@@ -218,6 +219,7 @@ class Gen {
       case "defn": {
         const exported = this.exportNames.has(d.name) ? "export " : "";
         const params = d.params.map((p) => jsName(p.name)).join(", ");
+        this.functionNames.push({ js: jsName(d.name), original: d.name });
         return `${exported}function ${jsName(d.name)}(${params}) {\n${this.stmt(d.body, "  ")}\n}`;
       }
       case "import": {

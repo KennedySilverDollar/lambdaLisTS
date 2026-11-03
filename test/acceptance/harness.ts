@@ -54,8 +54,13 @@ export function compileToDir(names: string[], dir: string): void {
   }
 }
 
-export function runNode(file: string, cwd: string): { status: number; stdout: string; stderr: string } {
-  const r = spawnSync(process.execPath, [file], { cwd, encoding: "utf8" });
+export function runNode(file: string, cwd: string, args: string[] = []): { status: number; stdout: string; stderr: string } {
+  const r = spawnSync(process.execPath, [...args, file], { cwd, encoding: "utf8" });
+  return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+export function runNodeStdin(file: string, cwd: string, input: string, args: string[] = []): { status: number; stdout: string; stderr: string } {
+  const r = spawnSync(process.execPath, [...args, file], { cwd, encoding: "utf8", input });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
