@@ -1,11 +1,20 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
 import type { CoreTopForm } from "../core/desugar.js";
 import { desugar } from "../core/desugar.js";
 import type { Core, Pattern, Value } from "../core/ir.js";
 import type { Diagnostic } from "../diagnostic.js";
+import { checkEffects } from "../effects/check.js";
 import type { Span } from "../lexer/token.js";
 import { tokenize } from "../lexer/lexer.js";
+import {
+  checkImportNames,
+  fileExists,
+  importNotFound,
+  moduleCycle,
+  ModuleGraph,
+  resolveImportPath,
+  type ModuleInfo,
+} from "../modules/resolver.js";
 import { printPattern } from "../parser/ast.js";
 import { parseProgram } from "../parser/parser.js";
 import { checkExhaustive } from "./exhaustive.js";
@@ -23,11 +32,11 @@ import { stdlibSchemes } from "./stdlib.js";
 
 export interface ModuleCache {
   modules: Map<string, ModuleResult>;
-  visiting: Set<string>;
+  graph: ModuleGraph;
 }
 
 export function newModuleCache(): ModuleCache {
-  return { modules: new Map(), visiting: new Set() };
+  return { modules: new Map(), graph: new ModuleGraph() };
 }
 
 export interface ModuleResult {
@@ -133,6 +142,7 @@ class Checker {
           break;
       }
     }
+    this.diagnostics.push(...checkEffects(defs));
     return {
       diagnostics: this.diagnostics,
       valueTypes: this.values,
@@ -143,25 +153,32 @@ class Checker {
   }
 
   private loadImport(d: Extract<CoreTopForm, { k: "import" }>, cache: ModuleCache): void {
-    if (!d.path.startsWith("./") && !d.path.startsWith("../")) return;
-    const target = resolve(dirname(this.file), d.path);
-    if (cache.visiting.has(target)) {
-      this.diag("module-cycle", d.span, `循環 import です: '${d.path}'`, { path: d.path });
+    const target = resolveImportPath(this.file, d.path);
+    if (target === null) return;
+    if (!fileExists(target)) {
+      this.diagnostics.push(importNotFound(d.span, d.path, d.path));
+      return;
+    }
+    if (cache.graph.isOnStack(target)) {
+      this.diagnostics.push(moduleCycle(d.span, d.path, d.path));
       return;
     }
     let mod = cache.modules.get(target);
     if (!mod) {
-      cache.visiting.add(target);
-      try {
-        mod = checkSource(readFileSync(target, "utf8"), target, cache);
-      } catch {
-        cache.visiting.delete(target);
-        this.diag("import-not-found", d.span, `import 先が見つかりません: '${d.path}'`, { path: d.path });
-        return;
-      }
-      cache.visiting.delete(target);
+      cache.graph.enter(target);
+      const src = readFileSync(target, "utf8");
+      mod = checkSource(src, target, cache);
+      cache.graph.leave(target);
       cache.modules.set(target, mod);
+      this.diagnostics.push(...mod.diagnostics);
     }
+    const info: ModuleInfo = {
+      exports: mod.exports,
+      valueNames: new Set(mod.valueTypes.keys()),
+      typeNames: new Set(mod.typeAliases.keys()),
+      effectNames: new Set(mod.effects.keys()),
+    };
+    this.diagnostics.push(...checkImportNames(info, d.names, d.span, d.path, d.path));
     for (const name of d.names) {
       const vt = mod.valueTypes.get(name);
       if (vt !== undefined) {
@@ -178,7 +195,6 @@ class Checker {
         this.effects.set(name, et);
         continue;
       }
-      this.diag("unbound-symbol", d.span, `モジュール '${d.path}' に '${name}' が存在しません`, { path: d.path });
     }
   }
 
