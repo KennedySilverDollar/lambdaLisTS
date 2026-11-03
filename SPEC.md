@@ -1,9 +1,10 @@
-# λ LisTS Language Specification v0.2 (P0)
+# λ LisTS Language Specification v0.2 (P0) — Rust Edition
 
 言語の正式名称は **λ LisTS** とする（本文中では単に LisTS とも記す）。
 
-Status: Draft for P0 implementation（v0.1 再考証修正版）
+Status: Draft for P0 implementation（v0.1 再考証修正版・Rust記法版）
 Backend: JavaScript（ES2022, ESM）
+Compiler implementation: Rust（edition 2021）
 Scope: Pure core + Result + minimal effects checking
 
 ---
@@ -37,6 +38,13 @@ Scope: Pure core + Result + minimal effects checking
 | 13 | 診断 kind 追加（duplicate-definition 等）、fix を特定 kind で MUST | 思想原則4「エラーは最高のプロンプト」 |
 | 14 | CLI・ビルドレイアウト・runtime import パスを規定 | 生成JSが実行不能だった |
 | 15 | 受入テストの相互参照を修正、テスト用ソースを付録Bに集約 | T1–T3 の参照先が存在しなかった |
+
+### 0.2 本版（Rust版）について
+
+- 本書は v0.2 の**言語規定をそのまま**に、規範的な型定義（Core IR・Type・Diagnostic・Value・Span）を TypeScript 記法から **Rust 記法**に置き換えた版である。文法・型規則・意味論・stdlib・JSバックエンド・受入テストに変更はない。
+- 規範の優先順位：**言語規定（文章） ＞ 本書の Rust 型定義 ＞ テキスト版の TS 定義**。食い違いがあれば言語規定が勝つ。
+- Rust 記法上の調整（`else_` / `ResultT` / `FnT` / `Str` 等の命名、パターンへの span 追加）は §付録C に列挙する。意味論的な変更ではない。
+- コンパイラ実装の規約（依存・unsafe 禁止等）は本書ではなく `GUIDE.md`（Rust版）が持つ。
 
 ---
 
@@ -102,11 +110,25 @@ bool       ::= 'true' | 'false'
 
 ### 2.4 コメントの保持
 
-コメントは式ではなく、**トリビア**として次のフォームのノードに `leading: string[]` として付随する（MUST）。ファイル末尾のコメントは program ノードに付随する。コメントは型検査の対象外だが、フォーマッタは正規位置に保存する（§10.3）。
+コメントは式ではなく、**トリビア**として次のフォームのノードに `leading` として付随する（MUST）。ファイル末尾のコメントは program ノードに付随する。コメントは型検査の対象外だが、フォーマッタは正規位置に保存する（§10.3）。
 
 ### 2.5 span
 
-すべてのASTノードは span = { file, start, end, line, col } を持た MUST。行・列は1始まり。コメント・空白は span に含めない。
+すべてのASTノードは span を持た MUST。
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]   // serde の "rc" feature 有効化
+pub struct Span {
+    pub file: Rc<str>,
+    pub start: usize,   // バイト位置
+    pub end: usize,     // バイト位置
+    pub line: usize,    // 1始まり
+    pub col: usize,     // 1始まり・Unicodeスカラー値換算（UTF-8 バイト数ではない）
+}
+```
+
+- start/end は**UTF-8バイト位置**、line/col は1始まりで、col は**Unicodeスカラー値換算**とする（MUST）。走査は `char_indices` を用いる。
+- コメント・空白は span に含めない。
 
 ---
 
@@ -246,29 +268,54 @@ let は単一束縛に正規化（MUST）。do の bind は順序を保つ。`an
 
 ## 5. Core IR
 
-```typescript
-type Core =
-  | { k: "Lit"; value: Value; span: Span }
-  | { k: "Var"; name: string; span: Span }
-  | { k: "Lam"; params: Param[]; ret: Type; body: Core; pure: boolean; span: Span }
-  | { k: "App"; fn: Core; args: Core[]; span: Span }
-  | { k: "Let"; name: string; rhs: Core; body: Core; span: Span }
-  | { k: "If"; cond: Core; then: Core; else: Core; span: Span }
-  | { k: "Match"; scrutinee: Core; arms: MatchArm[]; span: Span }
-  | { k: "Obj"; fields: [string, Core][]; span: Span }
-  | { k: "Field"; obj: Core; name: string; span: Span }
-  | { k: "EffectCall"; effect: string; args: Core[]; span: Span }
-  | { k: "Do"; binds: { name: string; expr: Core }[]; body: Core; span: Span }
-  | { k: "Error"; message: string; span: Span }   // パース回復用
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum Core {
+    Lit { value: Value, span: Span },
+    Var { name: Rc<str>, span: Span },
+    Lam { params: Vec<Param>, ret: Type, body: Box<Core>, pure: bool, span: Span },
+    App { f: Box<Core>, args: Vec<Core>, span: Span },
+    Let { name: Rc<str>, rhs: Box<Core>, body: Box<Core>, span: Span },
+    // else はRustの予約語のため else_ とする
+    If { cond: Box<Core>, then: Box<Core>, else_: Box<Core>, span: Span },
+    Match { scrutinee: Box<Core>, arms: Vec<MatchArm>, span: Span },
+    Obj { fields: Vec<(Rc<str>, Core)>, span: Span },      // 構築順を保持
+    Field { obj: Box<Core>, name: Rc<str>, span: Span },
+    EffectCall { effect: Rc<str>, args: Vec<Core>, span: Span },
+    Do { binds: Vec<DoBind>, body: Box<Core>, span: Span },
+    Error { message: String, span: Span },                 // パース回復用
+}
 
-type Param    = { name: string; type: Type }
-type MatchArm = { pattern: Pattern; body: Core }
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param { pub name: Rc<str>, pub ty: Type }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoBind { pub name: Rc<str>, pub expr: Core }     // "_" は束縛なし・参照不可
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm { pub pattern: Pat, pub body: Core }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pat {
+    pub kind: PatKind,
+    pub span: Span,        // Rust版の追加：回復診断・fix の path 安定化に必要
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatKind {
+    Wildcard,                       // '_'
+    Var(Rc<str>),
+    Lit(Value),                     // number | string | bool | nil
+    Obj(Vec<(Rc<str>, Pat)>),
+    Array(Vec<Pat>),
+    Or(Vec<Pat>),
+}
 ```
 
 不変条件：
 
-- Lam.pure = true のとき body に EffectCall を含まない（エフェクト検査が保証）。
-- Do は末尾位置限定（§7.3）。式中に現れない。do-bind の `_` は `"_"` として保持し、Var で参照不可。
+- `Lam { pure: true }` のとき body に EffectCall を含まない（エフェクト検査が保証）。
+- Do は末尾位置限定（§7.3）。式中に現れない。DoBind の `_` は `"_"` として保持し、Var で参照不可。
 - Match.arms は網羅的（型検査が保証）。
 
 ---
@@ -277,24 +324,36 @@ type MatchArm = { pattern: Pattern; body: Core }
 
 ### 6.1 型の表現
 
-```typescript
-type Type =
-  | { k: "number" } | { k: "string" } | { k: "bool" } | { k: "nil" }
-  | { k: "literal"; value: string }               // 文字列リテラル型（P0: tag専用）
-  | { k: "array"; element: Type }
-  | { k: "union"; members: Type[] }                // 正規化済み（§6.2）
-  | { k: "obj"; fields: Map<string, Type> }        // 構造的、幅部分型
-  | { k: "result"; ok: Type; err: Type }
-  | { k: "fn"; params: Type[]; ret: Type }
-  | { k: "var"; id: number }                       // 型変数（stdlib用、§6.4）
-  | { k: "alias"; name: string }                  // 展開済み
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Type {
+    Number,
+    Str,                            // 表示は "string"
+    Bool,
+    Nil,
+    Literal(Rc<str>),               // 文字列リテラル型（P0: tag専用）
+    Array(Box<Type>),
+    Union(Vec<Type>),               // 正規化済み（重複除去 + §6.2 ソート）
+    Obj(BTreeMap<Rc<str>, Type>),   // 構造的、幅部分型。順序安定
+    ResultT(Box<Type>, Box<Type>),  // 表示は "(Result T E)"
+    FnT(Vec<Type>, Box<Type>),      // 表示は "(fn (T ...) : R)"
+    Var(usize),                     // 型変数（stdlib用、rank-1）
+    Alias(Rc<str>),                 // 展開済み
+}
 
-type Scheme = { vars: number[]; body: Type }       // stdlibジェネリックシグネチャ
+#[derive(Debug, Clone)]
+pub struct Scheme {
+    pub vars: Vec<usize>,
+    pub body: Type,
+}
 ```
+
+- `ResultT` / `FnT` は std の `Result`・`Fn` との衝突回避命名。意味論は §3.3 の `Result` / `fn` と同一。
+- **Rust の `str` 比較（`Ord`）は UTF-8 バイト順**であり、§6.2 の「正規表示バイト列辞書順」と自然に一致する。union のソートと正規表示は同じ比較で構成する（MUST）。
 
 ### 6.2 正規化と正規表示
 
-- **union 正規化**：重複除去（構造的等価）→ `nil` 含有はそのままメンバー保持 → **ソートは「正規表示文字列」のバイト列辞書順**（決定的、MUST）。
+- **union 正規化**：重複除去（構造的等価）→ **ソートは「正規表示文字列」のバイト列辞書順**（決定的、MUST）。
 - **正規表示（type-of ・エラー表示・デバッグで使用）**：
   - プリミティブ：`number` `string` `bool` `nil`
   - リテラル：`"EmptyCart"`（文字列リテラル型は引用符付きで表示）
@@ -307,7 +366,7 @@ type Scheme = { vars: number[]; body: Type }       // stdlibジェネリック�
 
 ### 6.3 双方向型付け
 
-2つのモード：`infer(expr) → Type`（推論）、`check(expr, expected) → void`（検査）。
+2つのモード：`infer(expr) -> Type`（推論）、`check(expr, expected)`（検査）。Rust では `Result<Type, Vec<Diagnostic>>` / `Result<(), Vec<Diagnostic>>` とし、パニックしない。
 
 | 式 | 規則 |
 |---|---|
@@ -335,8 +394,7 @@ unify(union A, union B) = A ⊆ B（A の全メンバーが B のいずれかと
 unify(obj1, obj2) = obj2 の全フィールドが obj1 に存在し、型が unify（幅部分型）
 unify(result(T1,E1), result(T2,E2)) = unify(T1,T2) ∧ unify(E1,E2)
 unify(fn(P1)->R1, fn(P2)->R2) = 引数・戻り値を unify
-unify(var i, T) = bind（occurs check 付き）
-unify(T, var i) = bind
+unify(var i, T) = bind + occurs check
 ```
 
 **型変数の取り扱い（P0）**：
@@ -344,7 +402,7 @@ unify(T, var i) = bind
 - stdlib 関数は Scheme（量化された型変数を持つシグネチャ）として登録される。
 - 呼び出し毎に新しい型変数で実体化する（rank-1、呼び出し時実体化）。
 - ユーザーが型変数をシグネチャに書くことは P0 ではできない（P3で本格化）。
-- ローカル変数の推論は型変数を生成しない（注釈されたシグネチャと stdlib 実体化のみで完結する設計）。
+- ローカル変数の推論は型変数を生成しない。
 
 失敗時は構造化エラー（§9）を返す。expected と actual の正規表示を data に含める。
 
@@ -424,17 +482,29 @@ Do は以下の位置にのみ現れてよい：
 
 ### 8.2 値
 
-```typescript
-type Value =
-  | number | string | boolean | null
-  | Value[]
-  | { [key: string]: Value }          // tag付きオブジェクトを含む
-  | { tag: "Ok"; value: Value }
-  | { tag: "Err"; value: Value }
-  | Closure
+```rust
+#[derive(Debug, Clone)]
+pub enum Value {
+    Num(f64),
+    Str(Rc<str>),
+    Bool(bool),
+    Nil,                                   // JS null。undefined は存在しない（MUST）
+    Array(Vec<Value>),
+    Obj(BTreeMap<Rc<str>, Value>),        // tag付きオブジェクトを含む
+    Ok(Box<Value>),                       // JS { tag: "Ok",  value } に対応
+    Err(Box<Value>),                     // JS { tag: "Err", value } に対応
+    Closure(Rc<Closure>),                 // 実行時のみ。JS lowering の対象外
+}
+
+pub struct Closure {
+    pub params: Vec<Param>,
+    pub body: Rc<Core>,
+    pub env: Env,          // 値環境
+}
 ```
 
-null は nil に対応。undefined は存在しない（MUST）。
+- Rust 版では Ok / Err を専用バリアントとする。JS バックエンドとの対応（`{tag:"Ok"|"Err"}`）は lowering が保証する。両表現の構造的等価は保存される。
+- `Value::Obj` のキー順は `BTreeMap`（ソート済み）。**構造的等価はキー順に依存しない**（§8.3）ため、インタープリタと JS の差分一致を妨げない。
 
 ### 8.3 等価性
 
@@ -445,6 +515,10 @@ null は nil に対応。undefined は存在しない（MUST）。
 - オブジェクト：キー集合と各値の再帰的等価
 - Result：tag と value の等価
 
+```rust
+pub fn structural_equal(a: &Value, b: &Value) -> bool;
+```
+
 ### 8.4 Result の伝播
 
 do 内で Err が発生した場合、残りの bind と本体をスキップし、その Err を返す（早期リターン意味論）。do の外側の式は評価されない。
@@ -452,12 +526,12 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 ### 8.5 再帰
 
 - 末尾呼び出しは最適化すべき（SHOULD）。JSバックエンドではループ変換。
-- 非末尾再帰のスタック制限は実装依存。ドキュメントに明記。
+- 非末尾再帰のスタック制限は実装依存。Rust 実装では上限を定数として設け、超えた場合 internal-error 診断を返す（パニックしない）。上限値をドキュメントに明記。
 
 ### 8.6 数値と実行時エラー
 
-- number は IEEE754 倍精度浮動小数点（JS 準拠）。NaN・±Infinity は number の値。`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN（例外ではない）。decimal は P1。
-- P0（純粋関数のみ）における「実行時エラー」とは、JS エンジンが投げる実行時例外（RangeError: Maximum call stack size exceeded 等）を指す。T8 の source map 検証はこれを対象とする。
+- number は IEEE754 倍精度浮動小数点（JS 準拠）。Rust の `f64` は IEEE754 binary64 であり、JS と**同一の演算結果**を与える。NaN・±Infinity は number の値。`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN（例外ではない）。decimal は P1。
+- P0（純粋関数のみ）における「実行時エラー」とは、JS エンジンが投げる実行時例外（RangeError: Maximum call stack size exceeded 等）を指す。T8 の source map 検証はこれを対象とする。Rust インタープリタ側は対応する内部診断（深さ上限超過）とする。
 
 ---
 
@@ -465,7 +539,7 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 
 ### 9.1 エラーの種類
 
-| kind | フェーズ | 内容 |
+| kind（kebab-case） | フェーズ | 内容 |
 |---|---|---|
 | parse-error | 字句・構文 | 括弧不足・過剰、不正トークン、if の引数不足 |
 | type-mismatch | 型検査 | 型の不一致 |
@@ -482,24 +556,50 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 | not-exported | モジュール | 未 export シンボルの参照 |
 | module-cycle | モジュール | 循環参照 |
 | internal-error | 任意 | コンパイラのバグ |
+| unsupported-in-p0 | 実行 | P0範囲外（prop評価等）を要求された |
 
 ### 9.2 エラーの構造
 
-```typescript
-type Diagnostic = {
-  kind: string;
-  severity: "error" | "warning";
-  span: Span;
-  message: string;               // 人間向け（日本語）
-  data?: object;                 // 機械向け（missing、expected、actual 等）
-  fix?: Patch;                   // パッチテンプレート
-};
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagKind {
+    ParseError, TypeMismatch, UnboundSymbol, NonExhaustive, RedundantArm,
+    EffectViolation, UnknownEffect, ArityMismatch, NameConvention,
+    DuplicateDefinition, TypeSyntaxError, ImportNotFound, NotExported,
+    ModuleCycle, InternalError, UnsupportedInP0,
+}
 
-type Patch =
-  | { op: "replace"; path: string; template: string }
-  | { op: "insert"; path: string; template: string }
-  | { op: "delete"; path: string };
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Severity {
+    #[serde(rename = "error")]
+    Error,
+    #[serde(rename = "warning")]
+    Warning,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub kind: DiagKind,
+    pub severity: Severity,
+    pub span: Span,
+    pub message: String,                          // 人間向け（日本語）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,         // 機械向け（expected/actual/missing 等）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<Patch>,                      // パッチテンプレート
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op")]
+pub enum Patch {
+    #[serde(rename = "replace")] Replace { path: String, template: String },
+    #[serde(rename = "insert")]  Insert  { path: String, template: String },
+    #[serde(rename = "delete")]  Delete  { path: String },
+}
 ```
+
+JSON 直列化は serde_json とする（`Map` はデフォルトでキーソート → 診断JSONは決定的）。REPL・CLI の1行出力は `serde_json::to_string`（コンパクト単一行）を用いる。
 
 ### 9.3 fix テンプレートの規約（思想原則4：エラーは最高のプロンプト）
 
@@ -549,7 +649,7 @@ op と意味：
 
 - `eval`：src をパース・検査・評価し、定義名と型を返す。診断がある場合は `ok: false` + `errors`。
 - `test`：ロード済みの全 `example` を評価し、期待値と構造的等価で比較、結果リストを返す。
-- `prop`：P0 では受理するが評価せず unsupported エラーを返す（P1 で反例・縮小を実装）。
+- `prop`：P0 では受理するが評価せず unsupported-in-p0 エラーを返す（P1 で反例・縮小を実装）。
 - `reload`：ファイルを再読込し、依存も再検査する。
 - `type-of`：src の型を正規表示（§6.2）で返す。
 - `quit`：終了。
@@ -584,6 +684,8 @@ JSバックエンドはソースマップ v3 を出力し MUST、以下を保証
 - 実行時エラーのスタックトレースが .lts の行・列を指す。
 - `(defn ...)` の関数呼び出しスタックが元の関数名 `add-money` を表示する。
 
+生成は `sourcemap` クレートで行う（実装詳細。规範は出力形式のみ）。
+
 ### 10.5 CLI とビルドレイアウト
 
 ```
@@ -592,10 +694,11 @@ lists fmt <file.lts>...                    # 一意フォーマット（in-place
 lists repl                                 # JSON Lines REPL
 ```
 
+- `lists` は cargo でビルドされる**単一バイナリ**とする（外部ランタイム不要）。Node は生成JSの実行・テストにのみ使う。
 - `compile` の診断は JSON 配列（Diagnostic[]）を **stdout** に出力する。エラーなしは `[]`。exit code は正常 0 / 診断あり 1。
 - 出力：`<file>.js` + `<file>.js.map` をソースと同じ相対位置に（`--out` 指定時はルートを変更）。加えて出力ルート直下に `runtime.js` を一度だけ出力する。
 - 生成JSは runtime を `import { ok, err, structuralEqual } from "<相対パス>/runtime.js"` で読む（モジュールの深さに応じた決定的な相対パス）。
-- stdlib 関数は各生成JSに必要なものだけ インライン or `$stdlib` として import する。ユーザー定義による stdlib 名のシャドウは許容し、生成側で import 名を `$stdlib_<name>` に逃がす。
+- stdlib 関数は必要なものだけ `$stdlib_<name>` として import する。ユーザー定義による stdlib 名のシャドウは許容し、生成側で import 名を `$stdlib_<name>` に逃がす。
 
 ---
 
@@ -607,10 +710,10 @@ lists repl                                 # JSON Lines REPL
 
 | 名前 | 型 |
 |---|---|
-| `+` `-` `*` `/` | `(fn (number ...) : number)`（2引数固定。可変長はP1で検討） |
+| `+` `-` `*` `/` | `(fn (number number) : number)`（2引数固定。可変長はP1で検討） |
 | `<` `>` `<=` `>=` | `(fn (number number) : bool)` |
 | `=` | `(fn (T T) : bool)` 構造的等価 |
-| `mod` `abs` `min` `max` | `(fn (number number) : number)`（abs は1引数） |
+| `mod` `min` `max` | `(fn (number number) : number)`、`abs` は `(fn (number) : number)` |
 | `not` | `(fn (bool) : bool)` |
 
 ### 11.2 文字列
@@ -733,7 +836,7 @@ const host = {
 - **T4. モジュール** — 付録A money.lts / cart.lts が import して型検査・実行できる。付録B cycle-a/b は module-cycle エラー。
 - **T5. パーサ回復** — 付録B broken.lts で `ok` は定義され、`broken` にのみエラー。
 - **T6. エフェクト違反（検査のみ）** — 付録B effects.lts の `pure-run` 内 `log!` が effect-violation エラーと `defn!` への fix パッチを返す。
-- **T7. 差分一致** — T1–T6 すべてで、インタープリタと JS バックエンドの出力が構造的に一致。
+- **T7. 差分一致** — T1–T6 すべてで、Rust インタープリタと JS バックエンドの出力が構造的に一致。
 - **T8. source map** — JS実行時エラー（深い再帰によるスタックオーバーフロー等）のスタックトレースが .lts の該当行を指す。
 - **T9. REPL JSON** — eval / test / type-of のJSON入出力が仕様通りに動作。prop は unsupported エラーを返す。
 
@@ -745,7 +848,7 @@ const host = {
 
 | フェーズ | 追加機能 | 変更点 |
 |---|---|---|
-| P1 | defn! 完全実装、effect、do-io、decimal、**prop評価（反例生成・縮小、fast-check）** | host DI、モックhost |
+| P1 | defn! 完全実装、effect、do-io、decimal、**prop評価（反例生成・縮小、fast-check相当）** | host DI、モックhost |
 | P2 | condition system（制限付き）、restart-case、handle、`!throws` | コールバック方式、REPLデバッガ |
 | P3 | 増分コンパイル、LSP、ジェネリクス本格化（ユーザー型変数）、FFI標準 | 関数単位キャッシュ |
 | P4 | WASMバックエンド（GC + Stack Switching）、完全なリスタート | サンドボックス、決定性 |
@@ -770,7 +873,7 @@ const host = {
 
 ## 16. バージョニング
 
-- 本仕様は v0.2 (P0)。v0.1 から §0.1 の破壊的変更を含む。
+- 本書は **v0.2 (P0) Rust Edition**。言語規定は v0.2 テキスト版と同一（§0.2）。
 - P1 完了時に v0.3。
 - 各フェーズ完了時に仕様の該当節を更新する。
 
@@ -909,4 +1012,22 @@ const host = {
 
 ---
 
-End of Specification v0.2 (P0)
+## 付録C. Rust実装への規範的写像（本版の付加情報）
+
+言語規定に追加を与えない、実装への写像メモ。
+
+1. **命名の調整**（予約語・std型との衝突回避。意味論不变）：
+  - `If` の `else` → `else_`
+  - `Type::String` → `Type::Str`、`Type::Result` → `Type::ResultT`、`Type::Fn` → `Type::FnT`
+2. **構造の追加**：`Pat` に `span` を持たせる（回復診断・fix の ASTパス安定化のため）。テキスト版にはない唯一の追加。
+3. **決定性**：出力順が意味する箇所は `BTreeMap` かソート反復。serde_json の `preserve_order` は無効（デフォルト＝キーソート）。乱数・システム時刻・環境変数に依存しない。
+4. **IEEE754**：`f64` は IEEE754 binary64 であり JS number と同一。インタープリタと JS の差分一致（T7）は数値演算で自然に成立する。
+5. **`str` の `Ord` は UTF-8 バイト順**：§6.2 の「正規表示バイト列辞書順」ソートは Rust の文字列比較で直接実装できる。
+6. **Value::Ok / Err と JS**：インタープリタ内では専用バリアント、JS では `{tag:"Ok"|"Err", value}`。lowering が対応を保証し、構造的等価は保存される。
+7. **serde の `rc` feature**：`Rc<str>` の直列化に必要（Cargo.toml で `serde = { version = "...", features = ["rc"] }`）。
+8. **エラー取り扱い**：ライブラリ経路で `unwrap`/`expect`/パニックを置かない。回復不能は internal-error 診断へ。`unreachable!` は列挙網羅用に限る。
+9. **実装規約の詳細**（依存、unsafe 禁止、モジュール構成、テスト戦略）は `GUIDE.md`（Rust版）が規範。
+
+---
+
+End of Specification v0.2 (P0) — Rust Edition
