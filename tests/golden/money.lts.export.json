@@ -1,0 +1,15 @@
+{
+  "Export": {
+    "names": [
+      "add-money",
+      "zero"
+    ],
+    "span": {
+      "col": 1,
+      "end": 94,
+      "file": "money.lts",
+      "line": 4,
+      "start": 71
+    }
+  }
+}

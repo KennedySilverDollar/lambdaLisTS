@@ -1,0 +1,164 @@
+{
+  "Defn": {
+    "body": {
+      "Do": {
+        "binds": [
+          {
+            "expr": {
+              "App": {
+                "args": [
+                  {
+                    "Var": {
+                      "name": "items",
+                      "span": {
+                        "col": 21,
+                        "end": 1282,
+                        "file": "cart.lts",
+                        "line": 37,
+                        "start": 1277
+                      }
+                    }
+                  }
+                ],
+                "f": {
+                  "Var": {
+                    "name": "check-items",
+                    "span": {
+                      "col": 8,
+                      "end": 1283,
+                      "file": "cart.lts",
+                      "line": 37,
+                      "start": 1264
+                    }
+                  }
+                },
+                "span": {
+                  "col": 8,
+                  "end": 1283,
+                  "file": "cart.lts",
+                  "line": 37,
+                  "start": 1264
+                }
+              }
+            },
+            "name": "_"
+          },
+          {
+            "expr": {
+              "App": {
+                "args": [
+                  {
+                    "Var": {
+                      "name": "items",
+                      "span": {
+                        "col": 15,
+                        "end": 1304,
+                        "file": "cart.lts",
+                        "line": 38,
+                        "start": 1299
+                      }
+                    }
+                  }
+                ],
+                "f": {
+                  "Var": {
+                    "name": "total",
+                    "span": {
+                      "col": 8,
+                      "end": 1305,
+                      "file": "cart.lts",
+                      "line": 38,
+                      "start": 1292
+                    }
+                  }
+                },
+                "span": {
+                  "col": 8,
+                  "end": 1305,
+                  "file": "cart.lts",
+                  "line": 38,
+                  "start": 1292
+                }
+              }
+            },
+            "name": "t"
+          }
+        ],
+        "body": {
+          "App": {
+            "args": [
+              {
+                "Var": {
+                  "name": "t",
+                  "span": {
+                    "col": 9,
+                    "end": 1316,
+                    "file": "cart.lts",
+                    "line": 39,
+                    "start": 1315
+                  }
+                }
+              }
+            ],
+            "f": {
+              "Var": {
+                "name": "ok",
+                "span": {
+                  "col": 5,
+                  "end": 1317,
+                  "file": "cart.lts",
+                  "line": 39,
+                  "start": 1311
+                }
+              }
+            },
+            "span": {
+              "col": 5,
+              "end": 1317,
+              "file": "cart.lts",
+              "line": 39,
+              "start": 1311
+            }
+          }
+        },
+        "span": {
+          "col": 3,
+          "end": 1318,
+          "file": "cart.lts",
+          "line": 36,
+          "start": 1253
+        }
+      }
+    },
+    "name": "place-order",
+    "params": [
+      {
+        "name": "items",
+        "ty": {
+          "Array": {
+            "Alias": "CartItem"
+          }
+        }
+      }
+    ],
+    "path": "(defn place-order)",
+    "pure": true,
+    "ret": {
+      "ResultT": [
+        {
+          "Alias": "Money"
+        },
+        {
+          "Alias": "PlaceError"
+        }
+      ]
+    },
+    "span": {
+      "col": 1,
+      "end": 1319,
+      "file": "cart.lts",
+      "line": 35,
+      "start": 1178
+    }
+  }
+}

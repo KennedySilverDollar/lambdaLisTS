@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ir::{Core, Param};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Num(f64),
     Str(Rc<str>),
@@ -16,7 +18,7 @@ pub enum Value {
     Closure(Rc<Closure>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Closure {
     pub params: Vec<Param>,
     pub body: Rc<Core>,

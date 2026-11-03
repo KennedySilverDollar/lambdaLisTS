@@ -1,0 +1,387 @@
+{
+  "Defn": {
+    "body": {
+      "If": {
+        "cond": {
+          "App": {
+            "args": [
+              {
+                "Field": {
+                  "name": "currency",
+                  "obj": {
+                    "Var": {
+                      "name": "a",
+                      "span": {
+                        "col": 10,
+                        "end": 239,
+                        "file": "money.lts",
+                        "line": 10,
+                        "start": 229
+                      }
+                    }
+                  },
+                  "span": {
+                    "col": 10,
+                    "end": 239,
+                    "file": "money.lts",
+                    "line": 10,
+                    "start": 229
+                  }
+                }
+              },
+              {
+                "Field": {
+                  "name": "currency",
+                  "obj": {
+                    "Var": {
+                      "name": "b",
+                      "span": {
+                        "col": 21,
+                        "end": 250,
+                        "file": "money.lts",
+                        "line": 10,
+                        "start": 240
+                      }
+                    }
+                  },
+                  "span": {
+                    "col": 21,
+                    "end": 250,
+                    "file": "money.lts",
+                    "line": 10,
+                    "start": 240
+                  }
+                }
+              }
+            ],
+            "f": {
+              "Var": {
+                "name": "=",
+                "span": {
+                  "col": 7,
+                  "end": 251,
+                  "file": "money.lts",
+                  "line": 10,
+                  "start": 226
+                }
+              }
+            },
+            "span": {
+              "col": 7,
+              "end": 251,
+              "file": "money.lts",
+              "line": 10,
+              "start": 226
+            }
+          }
+        },
+        "else_": {
+          "App": {
+            "args": [
+              {
+                "App": {
+                  "args": [
+                    {
+                      "Lit": {
+                        "span": {
+                          "col": 22,
+                          "end": 362,
+                          "file": "money.lts",
+                          "line": 12,
+                          "start": 341
+                        },
+                        "value": {
+                          "Str": "currency mismatch: "
+                        }
+                      }
+                    },
+                    {
+                      "Field": {
+                        "name": "currency",
+                        "obj": {
+                          "Var": {
+                            "name": "a",
+                            "span": {
+                              "col": 44,
+                              "end": 373,
+                              "file": "money.lts",
+                              "line": 12,
+                              "start": 363
+                            }
+                          }
+                        },
+                        "span": {
+                          "col": 44,
+                          "end": 373,
+                          "file": "money.lts",
+                          "line": 12,
+                          "start": 363
+                        }
+                      }
+                    },
+                    {
+                      "Lit": {
+                        "span": {
+                          "col": 55,
+                          "end": 380,
+                          "file": "money.lts",
+                          "line": 12,
+                          "start": 374
+                        },
+                        "value": {
+                          "Str": " vs "
+                        }
+                      }
+                    },
+                    {
+                      "Field": {
+                        "name": "currency",
+                        "obj": {
+                          "Var": {
+                            "name": "b",
+                            "span": {
+                              "col": 62,
+                              "end": 391,
+                              "file": "money.lts",
+                              "line": 12,
+                              "start": 381
+                            }
+                          }
+                        },
+                        "span": {
+                          "col": 62,
+                          "end": 391,
+                          "file": "money.lts",
+                          "line": 12,
+                          "start": 381
+                        }
+                      }
+                    }
+                  ],
+                  "f": {
+                    "Var": {
+                      "name": "str-concat",
+                      "span": {
+                        "col": 10,
+                        "end": 392,
+                        "file": "money.lts",
+                        "line": 12,
+                        "start": 329
+                      }
+                    }
+                  },
+                  "span": {
+                    "col": 10,
+                    "end": 392,
+                    "file": "money.lts",
+                    "line": 12,
+                    "start": 329
+                  }
+                }
+              }
+            ],
+            "f": {
+              "Var": {
+                "name": "err",
+                "span": {
+                  "col": 5,
+                  "end": 393,
+                  "file": "money.lts",
+                  "line": 12,
+                  "start": 324
+                }
+              }
+            },
+            "span": {
+              "col": 5,
+              "end": 393,
+              "file": "money.lts",
+              "line": 12,
+              "start": 324
+            }
+          }
+        },
+        "span": {
+          "col": 3,
+          "end": 394,
+          "file": "money.lts",
+          "line": 10,
+          "start": 222
+        },
+        "then": {
+          "App": {
+            "args": [
+              {
+                "Obj": {
+                  "fields": [
+                    [
+                      "amount",
+                      {
+                        "App": {
+                          "args": [
+                            {
+                              "Field": {
+                                "name": "amount",
+                                "obj": {
+                                  "Var": {
+                                    "name": "a",
+                                    "span": {
+                                      "col": 25,
+                                      "end": 284,
+                                      "file": "money.lts",
+                                      "line": 11,
+                                      "start": 276
+                                    }
+                                  }
+                                },
+                                "span": {
+                                  "col": 25,
+                                  "end": 284,
+                                  "file": "money.lts",
+                                  "line": 11,
+                                  "start": 276
+                                }
+                              }
+                            },
+                            {
+                              "Field": {
+                                "name": "amount",
+                                "obj": {
+                                  "Var": {
+                                    "name": "b",
+                                    "span": {
+                                      "col": 34,
+                                      "end": 293,
+                                      "file": "money.lts",
+                                      "line": 11,
+                                      "start": 285
+                                    }
+                                  }
+                                },
+                                "span": {
+                                  "col": 34,
+                                  "end": 293,
+                                  "file": "money.lts",
+                                  "line": 11,
+                                  "start": 285
+                                }
+                              }
+                            }
+                          ],
+                          "f": {
+                            "Var": {
+                              "name": "+",
+                              "span": {
+                                "col": 22,
+                                "end": 294,
+                                "file": "money.lts",
+                                "line": 11,
+                                "start": 273
+                              }
+                            }
+                          },
+                          "span": {
+                            "col": 22,
+                            "end": 294,
+                            "file": "money.lts",
+                            "line": 11,
+                            "start": 273
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "currency",
+                      {
+                        "Field": {
+                          "name": "currency",
+                          "obj": {
+                            "Var": {
+                              "name": "a",
+                              "span": {
+                                "col": 55,
+                                "end": 316,
+                                "file": "money.lts",
+                                "line": 11,
+                                "start": 306
+                              }
+                            }
+                          },
+                          "span": {
+                            "col": 55,
+                            "end": 316,
+                            "file": "money.lts",
+                            "line": 11,
+                            "start": 306
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "span": {
+                    "col": 9,
+                    "end": 318,
+                    "file": "money.lts",
+                    "line": 11,
+                    "start": 260
+                  }
+                }
+              }
+            ],
+            "f": {
+              "Var": {
+                "name": "ok",
+                "span": {
+                  "col": 5,
+                  "end": 319,
+                  "file": "money.lts",
+                  "line": 11,
+                  "start": 256
+                }
+              }
+            },
+            "span": {
+              "col": 5,
+              "end": 319,
+              "file": "money.lts",
+              "line": 11,
+              "start": 256
+            }
+          }
+        }
+      }
+    },
+    "name": "add-money",
+    "params": [
+      {
+        "name": "a",
+        "ty": {
+          "Alias": "Money"
+        }
+      },
+      {
+        "name": "b",
+        "ty": {
+          "Alias": "Money"
+        }
+      }
+    ],
+    "path": "(defn add-money)",
+    "pure": true,
+    "ret": {
+      "ResultT": [
+        {
+          "Alias": "Money"
+        },
+        "Str"
+      ]
+    },
+    "span": {
+      "col": 1,
+      "end": 395,
+      "file": "money.lts",
+      "line": 9,
+      "start": 156
+    }
+  }
+}

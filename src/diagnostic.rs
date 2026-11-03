@@ -63,3 +63,26 @@ pub struct InternalError(pub String);
 pub fn to_json_line(_diags: &[Diagnostic]) -> String {
     unimplemented!("diagnostic: P0 未実装")
 }
+
+pub fn ast_path<S: AsRef<str>>(base: &str, segments: &[S]) -> AstPath {
+    if segments.is_empty() {
+        base.to_string()
+    } else {
+        let segs: Vec<&str> = segments.iter().map(|s| s.as_ref()).collect();
+        format!("{}.{}", base, segs.join("."))
+    }
+}
+
+pub fn top_form_path(form: &crate::ast::TopForm, index: usize) -> AstPath {
+    use crate::ast::TopForm;
+    match form {
+        TopForm::Defn { name, .. } => format!("(defn {name})"),
+        TopForm::TypeDef { name, .. } => format!("(type {name})"),
+        TopForm::EffectDef { name, .. } => format!("(effect {name})"),
+        TopForm::Prop { .. } => format!("(prop {index})"),
+        TopForm::Example { .. } => format!("(example {index})"),
+        TopForm::Import { .. } => "(import)".to_string(),
+        TopForm::Export { .. } => "(export)".to_string(),
+        TopForm::Error { .. } => "(error)".to_string(),
+    }
+}

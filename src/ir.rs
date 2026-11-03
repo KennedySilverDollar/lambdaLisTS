@@ -1,10 +1,12 @@
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::span::Span;
 use crate::types::Type;
 use crate::value::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Core {
     Lit { value: Value, span: Span },
     Var { name: Rc<str>, span: Span },
@@ -20,31 +22,31 @@ pub enum Core {
     Error { message: String, span: Span },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     pub name: Rc<str>,
     pub ty: Type,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoBind {
     pub name: Rc<str>,
     pub expr: Core,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchArm {
     pub pattern: Pat,
     pub body: Core,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pat {
     pub kind: PatKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PatKind {
     Wildcard,
     Var(Rc<str>),

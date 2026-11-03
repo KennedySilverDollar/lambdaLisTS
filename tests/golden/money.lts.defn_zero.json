@@ -1,0 +1,65 @@
+{
+  "Defn": {
+    "body": {
+      "Obj": {
+        "fields": [
+          [
+            "amount",
+            {
+              "Lit": {
+                "span": {
+                  "col": 16,
+                  "end": 134,
+                  "file": "money.lts",
+                  "line": 7,
+                  "start": 133
+                },
+                "value": {
+                  "Num": 0.0
+                }
+              }
+            }
+          ],
+          [
+            "currency",
+            {
+              "Lit": {
+                "span": {
+                  "col": 29,
+                  "end": 151,
+                  "file": "money.lts",
+                  "line": 7,
+                  "start": 146
+                },
+                "value": {
+                  "Str": "JPY"
+                }
+              }
+            }
+          ]
+        ],
+        "span": {
+          "col": 3,
+          "end": 153,
+          "file": "money.lts",
+          "line": 7,
+          "start": 120
+        }
+      }
+    },
+    "name": "zero",
+    "params": [],
+    "path": "(defn zero)",
+    "pure": true,
+    "ret": {
+      "Alias": "Money"
+    },
+    "span": {
+      "col": 1,
+      "end": 154,
+      "file": "money.lts",
+      "line": 6,
+      "start": 96
+    }
+  }
+}

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Type {
     Number,
     Str,
@@ -17,7 +19,7 @@ pub enum Type {
     Alias(Rc<str>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scheme {
     pub vars: Vec<usize>,
     pub body: Type,
