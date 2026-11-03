@@ -15,10 +15,14 @@ const DIGIT = /[0-9]/;
 const HEX_DIGIT = /[0-9a-fA-F]/;
 const NUMBER_RE = /-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?/y;
 
-export function tokenize(source: string, file: string): LexResult {
+export function normalizeSource(source: string): string {
   let text = source;
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  text = text.replace(/\r\n/g, "\n");
+  return text.replace(/\r\n/g, "\n");
+}
+
+export function tokenize(source: string, file: string): LexResult {
+  const text = normalizeSource(source);
 
   const lineStarts: number[] = [0];
   for (let k = 0; k < text.length; k++) {

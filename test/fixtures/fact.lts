@@ -1,3 +1,5 @@
 ;; 再帰テスト用: 階乗
+(export fact)
+
 (defn fact (n : number) : number
   (if (< n 1) 1 (* n (fact (- n 1)))))
