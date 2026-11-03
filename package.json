@@ -1,0 +1,19 @@
+{
+  "name": "lists",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc",
+    "cli": "node --enable-source-maps dist/tools/cli.js"
+  },
+  "dependencies": {
+    "magic-string": "^0.30.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

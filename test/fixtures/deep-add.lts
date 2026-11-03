@@ -1,0 +1,5 @@
+;; T8 用: add-money を深く再帰させてスタックオーバーフローさせる
+(export add-money)
+
+(defn add-money (n : number) : number
+  (if (< n 1) 0 (add-money (- n 1))))

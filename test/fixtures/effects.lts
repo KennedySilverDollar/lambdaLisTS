@@ -1,0 +1,7 @@
+;; B-2 effects.lts（T6 用：エフェクト違反）
+(effect log : (fn (s : string) : nil))
+
+(defn pure-run (x : number) : (Result number nil)
+  (do
+    [_ (log! (str x))]
+    (ok x)))

@@ -1,0 +1,2066 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`付録A: IR ゴールデンスナップショット > cart.lts の全 defs 1`] = `
+[
+  {
+    "k": "import",
+    "names": [
+      "Money",
+      "add-money",
+      "zero",
+    ],
+    "path": "./money.lts",
+    "span": {
+      "col": 1,
+      "end": 57,
+      "file": "cart.lts",
+      "line": 2,
+      "start": 12,
+    },
+  },
+  {
+    "k": "type",
+    "name": "CartItem",
+    "path": "(type CartItem)",
+    "span": {
+      "col": 1,
+      "end": 127,
+      "file": "cart.lts",
+      "line": 4,
+      "start": 59,
+    },
+    "type": {
+      "fields": Map {
+        "id" => {
+          "k": "string",
+        },
+        "price" => {
+          "k": "alias",
+          "name": "Money",
+        },
+        "qty" => {
+          "k": "number",
+        },
+      },
+      "k": "obj",
+    },
+  },
+  {
+    "k": "type",
+    "name": "OrderError",
+    "path": "(type OrderError)",
+    "span": {
+      "col": 1,
+      "end": 228,
+      "file": "cart.lts",
+      "line": 7,
+      "start": 129,
+    },
+    "type": {
+      "k": "union",
+      "members": [
+        {
+          "fields": Map {
+            "tag" => {
+              "k": "literal",
+              "value": "EmptyCart",
+            },
+          },
+          "k": "obj",
+        },
+        {
+          "fields": Map {
+            "tag" => {
+              "k": "literal",
+              "value": "NegativeQty",
+            },
+            "id" => {
+              "k": "string",
+            },
+          },
+          "k": "obj",
+        },
+      ],
+    },
+  },
+  {
+    "k": "type",
+    "name": "PlaceError",
+    "path": "(type PlaceError)",
+    "span": {
+      "col": 1,
+      "end": 347,
+      "file": "cart.lts",
+      "line": 13,
+      "start": 304,
+    },
+    "type": {
+      "k": "union",
+      "members": [
+        {
+          "k": "alias",
+          "name": "OrderError",
+        },
+        {
+          "k": "string",
+        },
+      ],
+    },
+  },
+  {
+    "k": "export",
+    "names": [
+      "place-order",
+    ],
+    "span": {
+      "col": 1,
+      "end": 369,
+      "file": "cart.lts",
+      "line": 15,
+      "start": 349,
+    },
+  },
+  {
+    "body": {
+      "cond": {
+        "args": [
+          {
+            "args": [
+              {
+                "k": "Var",
+                "name": "items",
+                "span": {
+                  "col": 17,
+                  "end": 463,
+                  "file": "cart.lts",
+                  "line": 18,
+                  "start": 458,
+                },
+              },
+            ],
+            "fn": {
+              "k": "Var",
+              "name": "count",
+              "span": {
+                "col": 10,
+                "end": 464,
+                "file": "cart.lts",
+                "line": 18,
+                "start": 451,
+              },
+            },
+            "k": "App",
+            "span": {
+              "col": 10,
+              "end": 464,
+              "file": "cart.lts",
+              "line": 18,
+              "start": 451,
+            },
+          },
+          {
+            "k": "Lit",
+            "span": {
+              "col": 24,
+              "end": 466,
+              "file": "cart.lts",
+              "line": 18,
+              "start": 465,
+            },
+            "value": 0,
+          },
+        ],
+        "fn": {
+          "k": "Var",
+          "name": "=",
+          "span": {
+            "col": 7,
+            "end": 467,
+            "file": "cart.lts",
+            "line": 18,
+            "start": 448,
+          },
+        },
+        "k": "App",
+        "span": {
+          "col": 7,
+          "end": 467,
+          "file": "cart.lts",
+          "line": 18,
+          "start": 448,
+        },
+      },
+      "else": {
+        "arms": [
+          {
+            "body": {
+              "args": [
+                {
+                  "k": "Lit",
+                  "span": {
+                    "col": 16,
+                    "end": 673,
+                    "file": "cart.lts",
+                    "line": 23,
+                    "start": 670,
+                  },
+                  "value": null,
+                },
+              ],
+              "fn": {
+                "k": "Var",
+                "name": "ok",
+                "span": {
+                  "col": 12,
+                  "end": 674,
+                  "file": "cart.lts",
+                  "line": 23,
+                  "start": 666,
+                },
+              },
+              "k": "App",
+              "span": {
+                "col": 12,
+                "end": 674,
+                "file": "cart.lts",
+                "line": 23,
+                "start": 666,
+              },
+            },
+            "pattern": {
+              "k": "lit",
+              "value": null,
+            },
+          },
+          {
+            "body": {
+              "args": [
+                {
+                  "fields": [
+                    [
+                      "tag",
+                      {
+                        "k": "Lit",
+                        "span": {
+                          "col": 25,
+                          "end": 713,
+                          "file": "cart.lts",
+                          "line": 24,
+                          "start": 700,
+                        },
+                        "value": "NegativeQty",
+                      },
+                    ],
+                    [
+                      "id",
+                      {
+                        "k": "Field",
+                        "name": "id",
+                        "obj": {
+                          "k": "Var",
+                          "name": "i",
+                          "span": {
+                            "col": 44,
+                            "end": 723,
+                            "file": "cart.lts",
+                            "line": 24,
+                            "start": 719,
+                          },
+                        },
+                        "span": {
+                          "col": 44,
+                          "end": 723,
+                          "file": "cart.lts",
+                          "line": 24,
+                          "start": 719,
+                        },
+                      },
+                    ],
+                  ],
+                  "k": "Obj",
+                  "span": {
+                    "col": 15,
+                    "end": 725,
+                    "file": "cart.lts",
+                    "line": 24,
+                    "start": 690,
+                  },
+                },
+              ],
+              "fn": {
+                "k": "Var",
+                "name": "err",
+                "span": {
+                  "col": 10,
+                  "end": 726,
+                  "file": "cart.lts",
+                  "line": 24,
+                  "start": 685,
+                },
+              },
+              "k": "App",
+              "span": {
+                "col": 10,
+                "end": 726,
+                "file": "cart.lts",
+                "line": 24,
+                "start": 685,
+              },
+            },
+            "pattern": {
+              "k": "var",
+              "name": "i",
+            },
+          },
+        ],
+        "k": "Match",
+        "scrutinee": {
+          "args": [
+            {
+              "k": "Var",
+              "name": "items",
+              "span": {
+                "col": 18,
+                "end": 524,
+                "file": "cart.lts",
+                "line": 20,
+                "start": 519,
+              },
+            },
+            {
+              "body": {
+                "args": [
+                  {
+                    "k": "Field",
+                    "name": "qty",
+                    "obj": {
+                      "k": "Var",
+                      "name": "i",
+                      "span": {
+                        "col": 53,
+                        "end": 559,
+                        "file": "cart.lts",
+                        "line": 20,
+                        "start": 554,
+                      },
+                    },
+                    "span": {
+                      "col": 53,
+                      "end": 559,
+                      "file": "cart.lts",
+                      "line": 20,
+                      "start": 554,
+                    },
+                  },
+                  {
+                    "k": "Lit",
+                    "span": {
+                      "col": 59,
+                      "end": 561,
+                      "file": "cart.lts",
+                      "line": 20,
+                      "start": 560,
+                    },
+                    "value": 0,
+                  },
+                ],
+                "fn": {
+                  "k": "Var",
+                  "name": "<",
+                  "span": {
+                    "col": 50,
+                    "end": 562,
+                    "file": "cart.lts",
+                    "line": 20,
+                    "start": 551,
+                  },
+                },
+                "k": "App",
+                "span": {
+                  "col": 50,
+                  "end": 562,
+                  "file": "cart.lts",
+                  "line": 20,
+                  "start": 551,
+                },
+              },
+              "k": "Lam",
+              "params": [
+                {
+                  "name": "i",
+                  "type": {
+                    "k": "alias",
+                    "name": "CartItem",
+                  },
+                },
+              ],
+              "pure": true,
+              "ret": {
+                "k": "bool",
+              },
+              "span": {
+                "col": 24,
+                "end": 563,
+                "file": "cart.lts",
+                "line": 20,
+                "start": 525,
+              },
+            },
+          ],
+          "fn": {
+            "k": "Var",
+            "name": "find",
+            "span": {
+              "col": 12,
+              "end": 564,
+              "file": "cart.lts",
+              "line": 20,
+              "start": 513,
+            },
+          },
+          "k": "App",
+          "span": {
+            "col": 12,
+            "end": 564,
+            "file": "cart.lts",
+            "line": 20,
+            "start": 513,
+          },
+        },
+        "span": {
+          "col": 5,
+          "end": 728,
+          "file": "cart.lts",
+          "line": 20,
+          "start": 506,
+        },
+      },
+      "k": "If",
+      "span": {
+        "col": 3,
+        "end": 729,
+        "file": "cart.lts",
+        "line": 18,
+        "start": 444,
+      },
+      "then": {
+        "args": [
+          {
+            "fields": [
+              [
+                "tag",
+                {
+                  "k": "Lit",
+                  "span": {
+                    "col": 20,
+                    "end": 498,
+                    "file": "cart.lts",
+                    "line": 19,
+                    "start": 487,
+                  },
+                  "value": "EmptyCart",
+                },
+              ],
+            ],
+            "k": "Obj",
+            "span": {
+              "col": 10,
+              "end": 500,
+              "file": "cart.lts",
+              "line": 19,
+              "start": 477,
+            },
+          },
+        ],
+        "fn": {
+          "k": "Var",
+          "name": "err",
+          "span": {
+            "col": 5,
+            "end": 501,
+            "file": "cart.lts",
+            "line": 19,
+            "start": 472,
+          },
+        },
+        "k": "App",
+        "span": {
+          "col": 5,
+          "end": 501,
+          "file": "cart.lts",
+          "line": 19,
+          "start": 472,
+        },
+      },
+    },
+    "k": "defn",
+    "name": "check-items",
+    "params": [
+      {
+        "name": "items",
+        "type": {
+          "element": {
+            "k": "alias",
+            "name": "CartItem",
+          },
+          "k": "array",
+        },
+      },
+    ],
+    "path": "(defn check-items)",
+    "pure": true,
+    "ret": {
+      "err": {
+        "k": "alias",
+        "name": "OrderError",
+      },
+      "k": "result",
+      "ok": {
+        "k": "nil",
+      },
+    },
+    "span": {
+      "col": 1,
+      "end": 730,
+      "file": "cart.lts",
+      "line": 17,
+      "start": 371,
+    },
+  },
+  {
+    "body": {
+      "args": [
+        {
+          "k": "Var",
+          "name": "items",
+          "span": {
+            "col": 5,
+            "end": 817,
+            "file": "cart.lts",
+            "line": 28,
+            "start": 812,
+          },
+        },
+        {
+          "args": [
+            {
+              "args": [],
+              "fn": {
+                "k": "Var",
+                "name": "zero",
+                "span": {
+                  "col": 9,
+                  "end": 832,
+                  "file": "cart.lts",
+                  "line": 29,
+                  "start": 826,
+                },
+              },
+              "k": "App",
+              "span": {
+                "col": 9,
+                "end": 832,
+                "file": "cart.lts",
+                "line": 29,
+                "start": 826,
+              },
+            },
+          ],
+          "fn": {
+            "k": "Var",
+            "name": "ok",
+            "span": {
+              "col": 5,
+              "end": 833,
+              "file": "cart.lts",
+              "line": 29,
+              "start": 822,
+            },
+          },
+          "k": "App",
+          "span": {
+            "col": 5,
+            "end": 833,
+            "file": "cart.lts",
+            "line": 29,
+            "start": 822,
+          },
+        },
+        {
+          "body": {
+            "args": [
+              {
+                "k": "Var",
+                "name": "acc",
+                "span": {
+                  "col": 13,
+                  "end": 926,
+                  "file": "cart.lts",
+                  "line": 31,
+                  "start": 923,
+                },
+              },
+              {
+                "body": {
+                  "args": [
+                    {
+                      "k": "Var",
+                      "name": "m",
+                      "span": {
+                        "col": 30,
+                        "end": 997,
+                        "file": "cart.lts",
+                        "line": 32,
+                        "start": 996,
+                      },
+                    },
+                    {
+                      "fields": [
+                        [
+                          "amount",
+                          {
+                            "args": [
+                              {
+                                "k": "Field",
+                                "name": "amount",
+                                "obj": {
+                                  "k": "Field",
+                                  "name": "price",
+                                  "obj": {
+                                    "k": "Var",
+                                    "name": "i",
+                                    "span": {
+                                      "col": 48,
+                                      "end": 1028,
+                                      "file": "cart.lts",
+                                      "line": 32,
+                                      "start": 1014,
+                                    },
+                                  },
+                                  "span": {
+                                    "col": 48,
+                                    "end": 1028,
+                                    "file": "cart.lts",
+                                    "line": 32,
+                                    "start": 1014,
+                                  },
+                                },
+                                "span": {
+                                  "col": 48,
+                                  "end": 1028,
+                                  "file": "cart.lts",
+                                  "line": 32,
+                                  "start": 1014,
+                                },
+                              },
+                              {
+                                "k": "Field",
+                                "name": "qty",
+                                "obj": {
+                                  "k": "Var",
+                                  "name": "i",
+                                  "span": {
+                                    "col": 63,
+                                    "end": 1034,
+                                    "file": "cart.lts",
+                                    "line": 32,
+                                    "start": 1029,
+                                  },
+                                },
+                                "span": {
+                                  "col": 63,
+                                  "end": 1034,
+                                  "file": "cart.lts",
+                                  "line": 32,
+                                  "start": 1029,
+                                },
+                              },
+                            ],
+                            "fn": {
+                              "k": "Var",
+                              "name": "*",
+                              "span": {
+                                "col": 45,
+                                "end": 1035,
+                                "file": "cart.lts",
+                                "line": 32,
+                                "start": 1011,
+                              },
+                            },
+                            "k": "App",
+                            "span": {
+                              "col": 45,
+                              "end": 1035,
+                              "file": "cart.lts",
+                              "line": 32,
+                              "start": 1011,
+                            },
+                          },
+                        ],
+                        [
+                          "currency",
+                          {
+                            "k": "Field",
+                            "name": "currency",
+                            "obj": {
+                              "k": "Field",
+                              "name": "price",
+                              "obj": {
+                                "k": "Var",
+                                "name": "i",
+                                "span": {
+                                  "col": 47,
+                                  "end": 1099,
+                                  "file": "cart.lts",
+                                  "line": 33,
+                                  "start": 1083,
+                                },
+                              },
+                              "span": {
+                                "col": 47,
+                                "end": 1099,
+                                "file": "cart.lts",
+                                "line": 33,
+                                "start": 1083,
+                              },
+                            },
+                            "span": {
+                              "col": 47,
+                              "end": 1099,
+                              "file": "cart.lts",
+                              "line": 33,
+                              "start": 1083,
+                            },
+                          },
+                        ],
+                      ],
+                      "k": "Obj",
+                      "span": {
+                        "col": 32,
+                        "end": 1101,
+                        "file": "cart.lts",
+                        "line": 32,
+                        "start": 998,
+                      },
+                    },
+                  ],
+                  "fn": {
+                    "k": "Var",
+                    "name": "add-money",
+                    "span": {
+                      "col": 19,
+                      "end": 1102,
+                      "file": "cart.lts",
+                      "line": 32,
+                      "start": 985,
+                    },
+                  },
+                  "k": "App",
+                  "span": {
+                    "col": 19,
+                    "end": 1102,
+                    "file": "cart.lts",
+                    "line": 32,
+                    "start": 985,
+                  },
+                },
+                "k": "Lam",
+                "params": [
+                  {
+                    "name": "m",
+                    "type": {
+                      "k": "alias",
+                      "name": "Money",
+                    },
+                  },
+                ],
+                "pure": true,
+                "ret": {
+                  "err": {
+                    "k": "string",
+                  },
+                  "k": "result",
+                  "ok": {
+                    "k": "alias",
+                    "name": "Money",
+                  },
+                },
+                "span": {
+                  "col": 17,
+                  "end": 1103,
+                  "file": "cart.lts",
+                  "line": 31,
+                  "start": 927,
+                },
+              },
+            ],
+            "fn": {
+              "k": "Var",
+              "name": "bind",
+              "span": {
+                "col": 7,
+                "end": 1104,
+                "file": "cart.lts",
+                "line": 31,
+                "start": 917,
+              },
+            },
+            "k": "App",
+            "span": {
+              "col": 7,
+              "end": 1104,
+              "file": "cart.lts",
+              "line": 31,
+              "start": 917,
+            },
+          },
+          "k": "Lam",
+          "params": [
+            {
+              "name": "acc",
+              "type": {
+                "err": {
+                  "k": "string",
+                },
+                "k": "result",
+                "ok": {
+                  "k": "alias",
+                  "name": "Money",
+                },
+              },
+            },
+            {
+              "name": "i",
+              "type": {
+                "k": "alias",
+                "name": "CartItem",
+              },
+            },
+          ],
+          "pure": true,
+          "ret": {
+            "err": {
+              "k": "string",
+            },
+            "k": "result",
+            "ok": {
+              "k": "alias",
+              "name": "Money",
+            },
+          },
+          "span": {
+            "col": 5,
+            "end": 1105,
+            "file": "cart.lts",
+            "line": 30,
+            "start": 838,
+          },
+        },
+      ],
+      "fn": {
+        "k": "Var",
+        "name": "fold-left",
+        "span": {
+          "col": 3,
+          "end": 1106,
+          "file": "cart.lts",
+          "line": 27,
+          "start": 797,
+        },
+      },
+      "k": "App",
+      "span": {
+        "col": 3,
+        "end": 1106,
+        "file": "cart.lts",
+        "line": 27,
+        "start": 797,
+      },
+    },
+    "k": "defn",
+    "name": "total",
+    "params": [
+      {
+        "name": "items",
+        "type": {
+          "element": {
+            "k": "alias",
+            "name": "CartItem",
+          },
+          "k": "array",
+        },
+      },
+    ],
+    "path": "(defn total)",
+    "pure": true,
+    "ret": {
+      "err": {
+        "k": "string",
+      },
+      "k": "result",
+      "ok": {
+        "k": "alias",
+        "name": "Money",
+      },
+    },
+    "span": {
+      "col": 1,
+      "end": 1107,
+      "file": "cart.lts",
+      "line": 26,
+      "start": 732,
+    },
+  },
+  {
+    "body": {
+      "binds": [
+        {
+          "expr": {
+            "args": [
+              {
+                "k": "Var",
+                "name": "items",
+                "span": {
+                  "col": 21,
+                  "end": 1213,
+                  "file": "cart.lts",
+                  "line": 37,
+                  "start": 1208,
+                },
+              },
+            ],
+            "fn": {
+              "k": "Var",
+              "name": "check-items",
+              "span": {
+                "col": 8,
+                "end": 1214,
+                "file": "cart.lts",
+                "line": 37,
+                "start": 1195,
+              },
+            },
+            "k": "App",
+            "span": {
+              "col": 8,
+              "end": 1214,
+              "file": "cart.lts",
+              "line": 37,
+              "start": 1195,
+            },
+          },
+          "name": "_",
+        },
+        {
+          "expr": {
+            "args": [
+              {
+                "k": "Var",
+                "name": "items",
+                "span": {
+                  "col": 15,
+                  "end": 1235,
+                  "file": "cart.lts",
+                  "line": 38,
+                  "start": 1230,
+                },
+              },
+            ],
+            "fn": {
+              "k": "Var",
+              "name": "total",
+              "span": {
+                "col": 8,
+                "end": 1236,
+                "file": "cart.lts",
+                "line": 38,
+                "start": 1223,
+              },
+            },
+            "k": "App",
+            "span": {
+              "col": 8,
+              "end": 1236,
+              "file": "cart.lts",
+              "line": 38,
+              "start": 1223,
+            },
+          },
+          "name": "t",
+        },
+      ],
+      "body": {
+        "args": [
+          {
+            "k": "Var",
+            "name": "t",
+            "span": {
+              "col": 9,
+              "end": 1247,
+              "file": "cart.lts",
+              "line": 39,
+              "start": 1246,
+            },
+          },
+        ],
+        "fn": {
+          "k": "Var",
+          "name": "ok",
+          "span": {
+            "col": 5,
+            "end": 1248,
+            "file": "cart.lts",
+            "line": 39,
+            "start": 1242,
+          },
+        },
+        "k": "App",
+        "span": {
+          "col": 5,
+          "end": 1248,
+          "file": "cart.lts",
+          "line": 39,
+          "start": 1242,
+        },
+      },
+      "k": "Do",
+      "span": {
+        "col": 3,
+        "end": 1249,
+        "file": "cart.lts",
+        "line": 36,
+        "start": 1184,
+      },
+    },
+    "k": "defn",
+    "name": "place-order",
+    "params": [
+      {
+        "name": "items",
+        "type": {
+          "element": {
+            "k": "alias",
+            "name": "CartItem",
+          },
+          "k": "array",
+        },
+      },
+    ],
+    "path": "(defn place-order)",
+    "pure": true,
+    "ret": {
+      "err": {
+        "k": "alias",
+        "name": "PlaceError",
+      },
+      "k": "result",
+      "ok": {
+        "k": "alias",
+        "name": "Money",
+      },
+    },
+    "span": {
+      "col": 1,
+      "end": 1250,
+      "file": "cart.lts",
+      "line": 35,
+      "start": 1109,
+    },
+  },
+  {
+    "actual": {
+      "args": [
+        {
+          "args": [],
+          "fn": {
+            "k": "Var",
+            "name": "array",
+            "span": {
+              "col": 23,
+              "end": 1281,
+              "file": "cart.lts",
+              "line": 41,
+              "start": 1274,
+            },
+          },
+          "k": "App",
+          "span": {
+            "col": 23,
+            "end": 1281,
+            "file": "cart.lts",
+            "line": 41,
+            "start": 1274,
+          },
+        },
+      ],
+      "fn": {
+        "k": "Var",
+        "name": "place-order",
+        "span": {
+          "col": 10,
+          "end": 1282,
+          "file": "cart.lts",
+          "line": 41,
+          "start": 1261,
+        },
+      },
+      "k": "App",
+      "span": {
+        "col": 10,
+        "end": 1282,
+        "file": "cart.lts",
+        "line": 41,
+        "start": 1261,
+      },
+    },
+    "expected": {
+      "args": [
+        {
+          "fields": [
+            [
+              "tag",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 21,
+                  "end": 1314,
+                  "file": "cart.lts",
+                  "line": 42,
+                  "start": 1303,
+                },
+                "value": "EmptyCart",
+              },
+            ],
+          ],
+          "k": "Obj",
+          "span": {
+            "col": 11,
+            "end": 1316,
+            "file": "cart.lts",
+            "line": 42,
+            "start": 1293,
+          },
+        },
+      ],
+      "fn": {
+        "k": "Var",
+        "name": "err",
+        "span": {
+          "col": 6,
+          "end": 1317,
+          "file": "cart.lts",
+          "line": 42,
+          "start": 1288,
+        },
+      },
+      "k": "App",
+      "span": {
+        "col": 6,
+        "end": 1317,
+        "file": "cart.lts",
+        "line": 42,
+        "start": 1288,
+      },
+    },
+    "k": "example",
+    "path": "(example 0)",
+    "span": {
+      "col": 1,
+      "end": 1318,
+      "file": "cart.lts",
+      "line": 41,
+      "start": 1252,
+    },
+  },
+]
+`;
+
+exports[`付録A: IR ゴールデンスナップショット > money.lts の全 defs 1`] = `
+[
+  {
+    "k": "type",
+    "name": "Money",
+    "path": "(type Money)",
+    "span": {
+      "col": 1,
+      "end": 69,
+      "file": "money.lts",
+      "line": 2,
+      "start": 13,
+    },
+    "type": {
+      "fields": Map {
+        "amount" => {
+          "k": "number",
+        },
+        "currency" => {
+          "k": "string",
+        },
+      },
+      "k": "obj",
+    },
+  },
+  {
+    "k": "export",
+    "names": [
+      "add-money",
+      "zero",
+    ],
+    "span": {
+      "col": 1,
+      "end": 94,
+      "file": "money.lts",
+      "line": 4,
+      "start": 71,
+    },
+  },
+  {
+    "body": {
+      "fields": [
+        [
+          "amount",
+          {
+            "k": "Lit",
+            "span": {
+              "col": 16,
+              "end": 134,
+              "file": "money.lts",
+              "line": 7,
+              "start": 133,
+            },
+            "value": 0,
+          },
+        ],
+        [
+          "currency",
+          {
+            "k": "Lit",
+            "span": {
+              "col": 29,
+              "end": 151,
+              "file": "money.lts",
+              "line": 7,
+              "start": 146,
+            },
+            "value": "JPY",
+          },
+        ],
+      ],
+      "k": "Obj",
+      "span": {
+        "col": 3,
+        "end": 153,
+        "file": "money.lts",
+        "line": 7,
+        "start": 120,
+      },
+    },
+    "k": "defn",
+    "name": "zero",
+    "params": [],
+    "path": "(defn zero)",
+    "pure": true,
+    "ret": {
+      "k": "alias",
+      "name": "Money",
+    },
+    "span": {
+      "col": 1,
+      "end": 154,
+      "file": "money.lts",
+      "line": 6,
+      "start": 96,
+    },
+  },
+  {
+    "body": {
+      "cond": {
+        "args": [
+          {
+            "k": "Field",
+            "name": "currency",
+            "obj": {
+              "k": "Var",
+              "name": "a",
+              "span": {
+                "col": 10,
+                "end": 239,
+                "file": "money.lts",
+                "line": 10,
+                "start": 229,
+              },
+            },
+            "span": {
+              "col": 10,
+              "end": 239,
+              "file": "money.lts",
+              "line": 10,
+              "start": 229,
+            },
+          },
+          {
+            "k": "Field",
+            "name": "currency",
+            "obj": {
+              "k": "Var",
+              "name": "b",
+              "span": {
+                "col": 21,
+                "end": 250,
+                "file": "money.lts",
+                "line": 10,
+                "start": 240,
+              },
+            },
+            "span": {
+              "col": 21,
+              "end": 250,
+              "file": "money.lts",
+              "line": 10,
+              "start": 240,
+            },
+          },
+        ],
+        "fn": {
+          "k": "Var",
+          "name": "=",
+          "span": {
+            "col": 7,
+            "end": 251,
+            "file": "money.lts",
+            "line": 10,
+            "start": 226,
+          },
+        },
+        "k": "App",
+        "span": {
+          "col": 7,
+          "end": 251,
+          "file": "money.lts",
+          "line": 10,
+          "start": 226,
+        },
+      },
+      "else": {
+        "args": [
+          {
+            "args": [
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 22,
+                  "end": 362,
+                  "file": "money.lts",
+                  "line": 12,
+                  "start": 341,
+                },
+                "value": "currency mismatch: ",
+              },
+              {
+                "k": "Field",
+                "name": "currency",
+                "obj": {
+                  "k": "Var",
+                  "name": "a",
+                  "span": {
+                    "col": 44,
+                    "end": 373,
+                    "file": "money.lts",
+                    "line": 12,
+                    "start": 363,
+                  },
+                },
+                "span": {
+                  "col": 44,
+                  "end": 373,
+                  "file": "money.lts",
+                  "line": 12,
+                  "start": 363,
+                },
+              },
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 55,
+                  "end": 380,
+                  "file": "money.lts",
+                  "line": 12,
+                  "start": 374,
+                },
+                "value": " vs ",
+              },
+              {
+                "k": "Field",
+                "name": "currency",
+                "obj": {
+                  "k": "Var",
+                  "name": "b",
+                  "span": {
+                    "col": 62,
+                    "end": 391,
+                    "file": "money.lts",
+                    "line": 12,
+                    "start": 381,
+                  },
+                },
+                "span": {
+                  "col": 62,
+                  "end": 391,
+                  "file": "money.lts",
+                  "line": 12,
+                  "start": 381,
+                },
+              },
+            ],
+            "fn": {
+              "k": "Var",
+              "name": "str-concat",
+              "span": {
+                "col": 10,
+                "end": 392,
+                "file": "money.lts",
+                "line": 12,
+                "start": 329,
+              },
+            },
+            "k": "App",
+            "span": {
+              "col": 10,
+              "end": 392,
+              "file": "money.lts",
+              "line": 12,
+              "start": 329,
+            },
+          },
+        ],
+        "fn": {
+          "k": "Var",
+          "name": "err",
+          "span": {
+            "col": 5,
+            "end": 393,
+            "file": "money.lts",
+            "line": 12,
+            "start": 324,
+          },
+        },
+        "k": "App",
+        "span": {
+          "col": 5,
+          "end": 393,
+          "file": "money.lts",
+          "line": 12,
+          "start": 324,
+        },
+      },
+      "k": "If",
+      "span": {
+        "col": 3,
+        "end": 394,
+        "file": "money.lts",
+        "line": 10,
+        "start": 222,
+      },
+      "then": {
+        "args": [
+          {
+            "fields": [
+              [
+                "amount",
+                {
+                  "args": [
+                    {
+                      "k": "Field",
+                      "name": "amount",
+                      "obj": {
+                        "k": "Var",
+                        "name": "a",
+                        "span": {
+                          "col": 25,
+                          "end": 284,
+                          "file": "money.lts",
+                          "line": 11,
+                          "start": 276,
+                        },
+                      },
+                      "span": {
+                        "col": 25,
+                        "end": 284,
+                        "file": "money.lts",
+                        "line": 11,
+                        "start": 276,
+                      },
+                    },
+                    {
+                      "k": "Field",
+                      "name": "amount",
+                      "obj": {
+                        "k": "Var",
+                        "name": "b",
+                        "span": {
+                          "col": 34,
+                          "end": 293,
+                          "file": "money.lts",
+                          "line": 11,
+                          "start": 285,
+                        },
+                      },
+                      "span": {
+                        "col": 34,
+                        "end": 293,
+                        "file": "money.lts",
+                        "line": 11,
+                        "start": 285,
+                      },
+                    },
+                  ],
+                  "fn": {
+                    "k": "Var",
+                    "name": "+",
+                    "span": {
+                      "col": 22,
+                      "end": 294,
+                      "file": "money.lts",
+                      "line": 11,
+                      "start": 273,
+                    },
+                  },
+                  "k": "App",
+                  "span": {
+                    "col": 22,
+                    "end": 294,
+                    "file": "money.lts",
+                    "line": 11,
+                    "start": 273,
+                  },
+                },
+              ],
+              [
+                "currency",
+                {
+                  "k": "Field",
+                  "name": "currency",
+                  "obj": {
+                    "k": "Var",
+                    "name": "a",
+                    "span": {
+                      "col": 55,
+                      "end": 316,
+                      "file": "money.lts",
+                      "line": 11,
+                      "start": 306,
+                    },
+                  },
+                  "span": {
+                    "col": 55,
+                    "end": 316,
+                    "file": "money.lts",
+                    "line": 11,
+                    "start": 306,
+                  },
+                },
+              ],
+            ],
+            "k": "Obj",
+            "span": {
+              "col": 9,
+              "end": 318,
+              "file": "money.lts",
+              "line": 11,
+              "start": 260,
+            },
+          },
+        ],
+        "fn": {
+          "k": "Var",
+          "name": "ok",
+          "span": {
+            "col": 5,
+            "end": 319,
+            "file": "money.lts",
+            "line": 11,
+            "start": 256,
+          },
+        },
+        "k": "App",
+        "span": {
+          "col": 5,
+          "end": 319,
+          "file": "money.lts",
+          "line": 11,
+          "start": 256,
+        },
+      },
+    },
+    "k": "defn",
+    "name": "add-money",
+    "params": [
+      {
+        "name": "a",
+        "type": {
+          "k": "alias",
+          "name": "Money",
+        },
+      },
+      {
+        "name": "b",
+        "type": {
+          "k": "alias",
+          "name": "Money",
+        },
+      },
+    ],
+    "path": "(defn add-money)",
+    "pure": true,
+    "ret": {
+      "err": {
+        "k": "string",
+      },
+      "k": "result",
+      "ok": {
+        "k": "alias",
+        "name": "Money",
+      },
+    },
+    "span": {
+      "col": 1,
+      "end": 395,
+      "file": "money.lts",
+      "line": 9,
+      "start": 156,
+    },
+  },
+  {
+    "actual": {
+      "args": [
+        {
+          "fields": [
+            [
+              "amount",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 34,
+                  "end": 431,
+                  "file": "money.lts",
+                  "line": 14,
+                  "start": 430,
+                },
+                "value": 1,
+              },
+            ],
+            [
+              "currency",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 47,
+                  "end": 448,
+                  "file": "money.lts",
+                  "line": 14,
+                  "start": 443,
+                },
+                "value": "JPY",
+              },
+            ],
+          ],
+          "k": "Obj",
+          "span": {
+            "col": 21,
+            "end": 450,
+            "file": "money.lts",
+            "line": 14,
+            "start": 417,
+          },
+        },
+        {
+          "fields": [
+            [
+              "amount",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 34,
+                  "end": 485,
+                  "file": "money.lts",
+                  "line": 15,
+                  "start": 484,
+                },
+                "value": 2,
+              },
+            ],
+            [
+              "currency",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 47,
+                  "end": 502,
+                  "file": "money.lts",
+                  "line": 15,
+                  "start": 497,
+                },
+                "value": "JPY",
+              },
+            ],
+          ],
+          "k": "Obj",
+          "span": {
+            "col": 21,
+            "end": 504,
+            "file": "money.lts",
+            "line": 15,
+            "start": 471,
+          },
+        },
+      ],
+      "fn": {
+        "k": "Var",
+        "name": "add-money",
+        "span": {
+          "col": 10,
+          "end": 505,
+          "file": "money.lts",
+          "line": 14,
+          "start": 406,
+        },
+      },
+      "k": "App",
+      "span": {
+        "col": 10,
+        "end": 505,
+        "file": "money.lts",
+        "line": 14,
+        "start": 406,
+      },
+    },
+    "expected": {
+      "args": [
+        {
+          "fields": [
+            [
+              "amount",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 23,
+                  "end": 529,
+                  "file": "money.lts",
+                  "line": 16,
+                  "start": 528,
+                },
+                "value": 3,
+              },
+            ],
+            [
+              "currency",
+              {
+                "k": "Lit",
+                "span": {
+                  "col": 36,
+                  "end": 546,
+                  "file": "money.lts",
+                  "line": 16,
+                  "start": 541,
+                },
+                "value": "JPY",
+              },
+            ],
+          ],
+          "k": "Obj",
+          "span": {
+            "col": 10,
+            "end": 548,
+            "file": "money.lts",
+            "line": 16,
+            "start": 515,
+          },
+        },
+      ],
+      "fn": {
+        "k": "Var",
+        "name": "ok",
+        "span": {
+          "col": 6,
+          "end": 549,
+          "file": "money.lts",
+          "line": 16,
+          "start": 511,
+        },
+      },
+      "k": "App",
+      "span": {
+        "col": 6,
+        "end": 549,
+        "file": "money.lts",
+        "line": 16,
+        "start": 511,
+      },
+    },
+    "k": "example",
+    "path": "(example 0)",
+    "span": {
+      "col": 1,
+      "end": 550,
+      "file": "money.lts",
+      "line": 14,
+      "start": 397,
+    },
+  },
+  {
+    "body": {
+      "args": [
+        {
+          "args": [
+            {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "k": "Var",
+                    "name": "a",
+                    "span": {
+                      "col": 32,
+                      "end": 652,
+                      "file": "money.lts",
+                      "line": 20,
+                      "start": 651,
+                    },
+                  },
+                ],
+                [
+                  "currency",
+                  {
+                    "k": "Lit",
+                    "span": {
+                      "col": 45,
+                      "end": 669,
+                      "file": "money.lts",
+                      "line": 20,
+                      "start": 664,
+                    },
+                    "value": "JPY",
+                  },
+                ],
+              ],
+              "k": "Obj",
+              "span": {
+                "col": 19,
+                "end": 671,
+                "file": "money.lts",
+                "line": 20,
+                "start": 638,
+              },
+            },
+            {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "k": "Var",
+                    "name": "b",
+                    "span": {
+                      "col": 32,
+                      "end": 704,
+                      "file": "money.lts",
+                      "line": 21,
+                      "start": 703,
+                    },
+                  },
+                ],
+                [
+                  "currency",
+                  {
+                    "k": "Lit",
+                    "span": {
+                      "col": 45,
+                      "end": 721,
+                      "file": "money.lts",
+                      "line": 21,
+                      "start": 716,
+                    },
+                    "value": "JPY",
+                  },
+                ],
+              ],
+              "k": "Obj",
+              "span": {
+                "col": 19,
+                "end": 723,
+                "file": "money.lts",
+                "line": 21,
+                "start": 690,
+              },
+            },
+          ],
+          "fn": {
+            "k": "Var",
+            "name": "add-money",
+            "span": {
+              "col": 8,
+              "end": 724,
+              "file": "money.lts",
+              "line": 20,
+              "start": 627,
+            },
+          },
+          "k": "App",
+          "span": {
+            "col": 8,
+            "end": 724,
+            "file": "money.lts",
+            "line": 20,
+            "start": 627,
+          },
+        },
+        {
+          "args": [
+            {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "k": "Var",
+                    "name": "b",
+                    "span": {
+                      "col": 32,
+                      "end": 757,
+                      "file": "money.lts",
+                      "line": 22,
+                      "start": 756,
+                    },
+                  },
+                ],
+                [
+                  "currency",
+                  {
+                    "k": "Lit",
+                    "span": {
+                      "col": 45,
+                      "end": 774,
+                      "file": "money.lts",
+                      "line": 22,
+                      "start": 769,
+                    },
+                    "value": "JPY",
+                  },
+                ],
+              ],
+              "k": "Obj",
+              "span": {
+                "col": 19,
+                "end": 776,
+                "file": "money.lts",
+                "line": 22,
+                "start": 743,
+              },
+            },
+            {
+              "fields": [
+                [
+                  "amount",
+                  {
+                    "k": "Var",
+                    "name": "a",
+                    "span": {
+                      "col": 32,
+                      "end": 809,
+                      "file": "money.lts",
+                      "line": 23,
+                      "start": 808,
+                    },
+                  },
+                ],
+                [
+                  "currency",
+                  {
+                    "k": "Lit",
+                    "span": {
+                      "col": 45,
+                      "end": 826,
+                      "file": "money.lts",
+                      "line": 23,
+                      "start": 821,
+                    },
+                    "value": "JPY",
+                  },
+                ],
+              ],
+              "k": "Obj",
+              "span": {
+                "col": 19,
+                "end": 828,
+                "file": "money.lts",
+                "line": 23,
+                "start": 795,
+              },
+            },
+          ],
+          "fn": {
+            "k": "Var",
+            "name": "add-money",
+            "span": {
+              "col": 8,
+              "end": 829,
+              "file": "money.lts",
+              "line": 22,
+              "start": 732,
+            },
+          },
+          "k": "App",
+          "span": {
+            "col": 8,
+            "end": 829,
+            "file": "money.lts",
+            "line": 22,
+            "start": 732,
+          },
+        },
+      ],
+      "fn": {
+        "k": "Var",
+        "name": "=",
+        "span": {
+          "col": 5,
+          "end": 830,
+          "file": "money.lts",
+          "line": 20,
+          "start": 624,
+        },
+      },
+      "k": "App",
+      "span": {
+        "col": 5,
+        "end": 830,
+        "file": "money.lts",
+        "line": 20,
+        "start": 624,
+      },
+    },
+    "k": "prop",
+    "name": "add-money commutative",
+    "params": [
+      {
+        "name": "a",
+        "type": {
+          "k": "number",
+        },
+      },
+      {
+        "name": "b",
+        "type": {
+          "k": "number",
+        },
+      },
+    ],
+    "path": "(prop 0)",
+    "span": {
+      "col": 1,
+      "end": 832,
+      "file": "money.lts",
+      "line": 18,
+      "start": 552,
+    },
+  },
+]
+`;
