@@ -1,4 +1,5 @@
 import type { Diagnostic } from "../diagnostic.js";
+import { tokenize } from "../lexer/lexer.js";
 import type { LexResult } from "../lexer/lexer.js";
 import type { Span, Token } from "../lexer/token.js";
 import type * as ast from "./ast.js";
@@ -41,6 +42,14 @@ export function parseProgram(input: Token[] | LexResult): ParseResult {
     : { file: "", start: 0, end: 0, line: 1, col: 1 };
   const program: ast.Program = { k: "program", forms, trailing: lex.trailingComments, span, leading: [] };
   return { program, diagnostics: [...lex.diagnostics, ...parser.diagnostics] };
+}
+
+export function parseExpr(src: string, file: string): { expr: ast.Expr | null; diagnostics: Diagnostic[] } {
+  const lex = tokenize(src, file);
+  const parser = new Parser(lex.tokens);
+  const raws = parser.readAll();
+  const expr = raws.length > 0 ? parser.buildExpr(raws[0], "(expr)") : null;
+  return { expr, diagnostics: [...lex.diagnostics, ...parser.diagnostics] };
 }
 
 class Parser {

@@ -24,6 +24,10 @@ export function desugar(program: ast.Program): DesugarResult {
   return new Desugarer().run(program);
 }
 
+export function desugarExpr(e: ast.Expr, path = "(expr)"): Core {
+  return new Desugarer().expr(e, path);
+}
+
 class Desugarer {
   readonly diagnostics: Diagnostic[] = [];
   private fresh = 0;

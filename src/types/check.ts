@@ -71,6 +71,12 @@ export function checkFile(path: string, cache: ModuleCache = newModuleCache()): 
   return checkSource(readFileSync(path, "utf8"), path, cache);
 }
 
+export function createContext(defs: CoreTopForm[], file: string, cache: ModuleCache = newModuleCache()) {
+  const checker = new Checker(file, cache);
+  const result = checker.run(defs, cache);
+  return { ...result, infer: (e: Core) => checker.infer(e, "(repl)") };
+}
+
 export function typeOfAll(result: ModuleResult): Map<string, string> {
   const out = new Map<string, string>();
   for (const [name, t] of result.valueTypes) {
