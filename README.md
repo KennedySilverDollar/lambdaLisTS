@@ -129,3 +129,9 @@ docs/         README.md（詳細・実測値・既知の差異）
 | T9 | REPL の JSON 往復（eval/test/type-of、prop は unsupported） | ✅ |
 
 詳細な説明・既知の差異は [docs/README.md](docs/README.md) を参照してください。
+
+## Rust 版（P0 移植の進行中）
+
+Rust 実装はルートの `Cargo.toml`（`cargo build` / `cargo test`）。現時点の進捗: M0 スキャフォールド〜M7（レキサ・パーサ・脱糖・双方向型検査・網羅性検査・エフェクト/モジュール検査・Core IR インタープリタ）まで完了。
+
+- Rust インタープリタの再帰深さ上限は `src/eval.rs` の `MAX_CALL_DEPTH = 10000` です（SPEC §8.5）。上限超過時はパニックせず `internal-error` を返します。

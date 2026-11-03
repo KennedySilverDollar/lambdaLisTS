@@ -1,19 +1,790 @@
-use crate::diagnostic::Diagnostic;
-use crate::ir::Core;
-use crate::value::{Env, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq)]
+use crate::desugar::{desugar, CoreDef};
+use crate::ir::{Core, Pat, PatKind};
+use crate::lexer::tokenize;
+use crate::parser::parse_program;
+use crate::resolver::resolve_import_path;
+use crate::value::{print_value, structural_equal, Builtin, BuiltinKind, Closure, Env, Value};
+
+pub const MAX_CALL_DEPTH: usize = 10000;
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum EvalError {
+    #[error("internal-error: {0}")]
+    Internal(String),
+    #[error("{0}")]
+    Runtime(String),
+}
+
+#[derive(Default)]
+pub struct Interp {
+    pub depth: usize,
+    pub calls: BTreeMap<String, usize>,
+}
+
+impl Interp {
+    pub fn new() -> Self {
+        Interp::default()
+    }
+
+    pub fn calls(&self) -> &BTreeMap<String, usize> {
+        &self.calls
+    }
+
+    pub fn apply(&mut self, f: Value, args: Vec<Value>) -> Result<Value, EvalError> {
+        match f {
+            Value::Builtin(b) => self.apply_builtin(&b, args),
+            Value::Closure(c) => {
+                if c.params.len() != args.len() {
+                    return Err(EvalError::Runtime(format!(
+                        "引数の数が一致しません: '{}' は {} 引数",
+                        c.name.as_deref().unwrap_or("anonymous"),
+                        c.params.len()
+                    )));
+                }
+                self.depth += 1;
+                if self.depth > MAX_CALL_DEPTH {
+                    self.depth -= 1;
+                    return Err(EvalError::Internal(format!(
+                        "再帰深さの上限 {MAX_CALL_DEPTH} を超えました（§8.5）"
+                    )));
+                }
+                if let Some(name) = &c.name {
+                    *self.calls.entry(name.to_string()).or_insert(0) += 1;
+                }
+                let vars: BTreeMap<Rc<str>, Value> = c
+                    .params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .zip(args)
+                    .collect();
+                let env = Env::child_of(&c.env, vars);
+                let r = eval_core(self, &c.body, &env);
+                self.depth -= 1;
+                r
+            }
+            _ => Err(EvalError::Runtime(
+                "関数ではない値を呼び出しました".to_string(),
+            )),
+        }
+    }
+
+    fn apply_builtin(&mut self, b: &Builtin, args: Vec<Value>) -> Result<Value, EvalError> {
+        let num = |v: &Value| -> Result<f64, EvalError> {
+            match v {
+                Value::Num(n) => Ok(*n),
+                _ => Err(EvalError::Runtime("number が必要です".to_string())),
+            }
+        };
+        let str_v = |v: &Value| -> Result<Rc<str>, EvalError> {
+            match v {
+                Value::Str(s) => Ok(s.clone()),
+                _ => Err(EvalError::Runtime("string が必要です".to_string())),
+            }
+        };
+        let arr_v = |v: &Value| -> Result<Vec<Value>, EvalError> {
+            match v {
+                Value::Array(a) => Ok(a.clone()),
+                _ => Err(EvalError::Runtime("Array が必要です".to_string())),
+            }
+        };
+        let bool_v = |v: &Value| -> Result<bool, EvalError> {
+            match v {
+                Value::Bool(b) => Ok(*b),
+                _ => Err(EvalError::Runtime("bool が必要です".to_string())),
+            }
+        };
+        let ok_v = |v: Value| Value::Ok(Box::new(v));
+        let err_v = |v: Value| Value::Err(Box::new(v));
+        match b.kind {
+            BuiltinKind::Add => Ok(Value::Num(num(&args[0])? + num(&args[1])?)),
+            BuiltinKind::Sub => Ok(Value::Num(num(&args[0])? - num(&args[1])?)),
+            BuiltinKind::Mul => Ok(Value::Num(num(&args[0])? * num(&args[1])?)),
+            BuiltinKind::Div => Ok(Value::Num(num(&args[0])? / num(&args[1])?)),
+            BuiltinKind::Lt => Ok(Value::Bool(num(&args[0])? < num(&args[1])?)),
+            BuiltinKind::Gt => Ok(Value::Bool(num(&args[0])? > num(&args[1])?)),
+            BuiltinKind::Le => Ok(Value::Bool(num(&args[0])? <= num(&args[1])?)),
+            BuiltinKind::Ge => Ok(Value::Bool(num(&args[0])? >= num(&args[1])?)),
+            BuiltinKind::Eq => Ok(Value::Bool(structural_equal(&args[0], &args[1]))),
+            BuiltinKind::Mod => Ok(Value::Num(num(&args[0])? % num(&args[1])?)),
+            BuiltinKind::Abs => Ok(Value::Num(num(&args[0])?.abs())),
+            BuiltinKind::Min => Ok(Value::Num(num(&args[0])?.min(num(&args[1])?))),
+            BuiltinKind::Max => Ok(Value::Num(num(&args[0])?.max(num(&args[1])?))),
+            BuiltinKind::Not => Ok(Value::Bool(!bool_v(&args[0])?)),
+            BuiltinKind::Str => Ok(Value::Str(Rc::from(print_value(&args[0]).as_str()))),
+            BuiltinKind::StrConcat => {
+                let mut s = String::new();
+                for a in &args {
+                    s.push_str(&str_v(a)?);
+                }
+                Ok(Value::Str(Rc::from(s.as_str())))
+            }
+            BuiltinKind::StrSlice => {
+                let s: Vec<char> = str_v(&args[0])?.chars().collect();
+                let (a, b) = js_slice_bounds(s.len(), num(&args[1])?, num(&args[2])?);
+                Ok(Value::Str(Rc::from(s[a..b].iter().collect::<String>().as_str())))
+            }
+            BuiltinKind::Len => Ok(Value::Num(str_v(&args[0])?.chars().count() as f64)),
+            BuiltinKind::Contains => Ok(Value::Bool(str_v(&args[0])?.contains(&*str_v(&args[1])?))),
+            BuiltinKind::Split => {
+                let parts: Vec<Value> = str_v(&args[0])?
+                    .split(str_v(&args[1])?.as_ref())
+                    .map(|p| Value::Str(Rc::from(p)))
+                    .collect();
+                Ok(Value::Array(parts))
+            }
+            BuiltinKind::Array => Ok(Value::Array(args)),
+            BuiltinKind::Nth => {
+                let arr = arr_v(&args[0])?;
+                let i = num(&args[1])?;
+                if i >= 0.0 && (i as usize) < arr.len() {
+                    Ok(ok_v(arr[i as usize].clone()))
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
+            BuiltinKind::Count => Ok(Value::Num(arr_v(&args[0])?.len() as f64)),
+            BuiltinKind::Slice => {
+                let arr = arr_v(&args[0])?;
+                let (a, b) = js_slice_bounds(arr.len(), num(&args[1])?, num(&args[2])?);
+                Ok(Value::Array(arr[a..b].to_vec()))
+            }
+            BuiltinKind::Push => {
+                let mut arr = arr_v(&args[0])?;
+                arr.push(args[1].clone());
+                Ok(Value::Array(arr))
+            }
+            BuiltinKind::Concat => {
+                let mut out = arr_v(&args[0])?;
+                out.extend(arr_v(&args[1])?);
+                Ok(Value::Array(out))
+            }
+            BuiltinKind::Map => {
+                let arr = arr_v(&args[0])?;
+                let f = args[1].clone();
+                let mut out = Vec::with_capacity(arr.len());
+                for x in arr {
+                    out.push(self.apply(f.clone(), vec![x])?);
+                }
+                Ok(Value::Array(out))
+            }
+            BuiltinKind::Filter => {
+                let arr = arr_v(&args[0])?;
+                let f = args[1].clone();
+                let mut out = Vec::new();
+                for x in arr {
+                    if bool_v(&self.apply(f.clone(), vec![x.clone()])?)? {
+                        out.push(x);
+                    }
+                }
+                Ok(Value::Array(out))
+            }
+            BuiltinKind::FoldLeft => {
+                let arr = arr_v(&args[0])?;
+                let mut acc = args[1].clone();
+                let f = args[2].clone();
+                for x in arr {
+                    acc = self.apply(f.clone(), vec![acc, x])?;
+                }
+                Ok(acc)
+            }
+            BuiltinKind::Find => {
+                let arr = arr_v(&args[0])?;
+                let f = args[1].clone();
+                for x in arr {
+                    if bool_v(&self.apply(f.clone(), vec![x.clone()])?)? {
+                        return Ok(ok_v(x));
+                    }
+                }
+                Ok(Value::Nil)
+            }
+            BuiltinKind::Any => {
+                let arr = arr_v(&args[0])?;
+                let f = args[1].clone();
+                for x in arr {
+                    if bool_v(&self.apply(f.clone(), vec![x])?)? {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            BuiltinKind::All => {
+                let arr = arr_v(&args[0])?;
+                let f = args[1].clone();
+                for x in arr {
+                    if !bool_v(&self.apply(f.clone(), vec![x])?)? {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            BuiltinKind::Ok => Ok(ok_v(args[0].clone())),
+            BuiltinKind::Err => Ok(err_v(args[0].clone())),
+            BuiltinKind::Bind => {
+                let r = &args[0];
+                match r {
+                    Value::Ok(v) => {
+                        let inner = (**v).clone();
+                        self.apply(args[1].clone(), vec![inner])
+                    }
+                    other => Ok(other.clone()),
+                }
+            }
+            BuiltinKind::MapResult => {
+                let r = &args[0];
+                match r {
+                    Value::Ok(v) => {
+                        let inner = (**v).clone();
+                        Ok(ok_v(self.apply(args[1].clone(), vec![inner])?))
+                    }
+                    other => Ok(other.clone()),
+                }
+            }
+            BuiltinKind::Traverse => {
+                let arr = arr_v(&args[0])?;
+                let f = args[1].clone();
+                let mut out = Vec::with_capacity(arr.len());
+                for x in arr {
+                    let r = self.apply(f.clone(), vec![x])?;
+                    match r {
+                        Value::Err(_) => return Ok(r),
+                        Value::Ok(v) => out.push(*v),
+                        other => out.push(other),
+                    }
+                }
+                Ok(ok_v(Value::Array(out)))
+            }
+        }
+    }
+}
+
+fn js_slice_bounds(len: usize, start: f64, end: f64) -> (usize, usize) {
+    let len_f = len as f64;
+    let s = if start.is_nan() {
+        0.0
+    } else if start < 0.0 {
+        (len_f + start).max(0.0)
+    } else {
+        start.min(len_f)
+    };
+    let e = if end.is_nan() {
+        len_f
+    } else if end < 0.0 {
+        (len_f + end).max(0.0)
+    } else {
+        end.min(len_f)
+    };
+    (s as usize, (e.max(s)) as usize)
+}
+
+pub fn eval_core(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, EvalError> {
+    match e {
+        Core::Lit { value, .. } => Ok(value.clone()),
+        Core::Var { name, .. } => env
+            .lookup(name)
+            .ok_or_else(|| EvalError::Runtime(format!("未束縛のシンボルです: '{name}'"))),
+        Core::Lam {
+            params, body, ..
+        } => Ok(Value::Closure(Rc::new(Closure {
+            params: params.clone(),
+            body: Rc::new((**body).clone()),
+            env: env.clone(),
+            name: None,
+        }))),
+        Core::App { f, args, .. } => {
+            let fv = eval_core(interp, f, env)?;
+            let mut argv = Vec::with_capacity(args.len());
+            for a in args {
+                argv.push(eval_core(interp, a, env)?);
+            }
+            interp.apply(fv, argv)
+        }
+        Core::Let {
+            name, rhs, body, ..
+        } => {
+            let v = eval_core(interp, rhs, env)?;
+            let child = Env::child_of(env, BTreeMap::from([(name.clone(), v)]));
+            eval_core(interp, body, &child)
+        }
+        Core::If {
+            cond,
+            then,
+            else_,
+            ..
+        } => {
+            let c = eval_core(interp, cond, env)?;
+            match c {
+                Value::Bool(true) => eval_core(interp, then, env),
+                Value::Bool(false) => eval_core(interp, else_, env),
+                _ => Err(EvalError::Runtime(
+                    "if >条件式は bool でなければなりません".to_string(),
+                )),
+            }
+        }
+        Core::Match {
+            scrutinee, arms, ..
+        } => {
+            let scrut = eval_core(interp, scrutinee, env)?;
+            for arm in arms {
+                let mut binds = BTreeMap::new();
+                if match_value(&arm.pattern, &scrut, &mut binds) {
+                    let child = Env::child_of(env, binds);
+                    return eval_core(interp, &arm.body, &child);
+                }
+            }
+            Err(EvalError::Runtime(
+                "match がどのアームにも合致しませんでした".to_string(),
+            ))
+        }
+        Core::Obj { fields, .. } => {
+            let mut map: BTreeMap<Rc<str>, Value> = BTreeMap::new();
+            for (name, expr) in fields {
+                map.insert(name.clone(), eval_core(interp, expr, env)?);
+            }
+            Ok(Value::Obj(map))
+        }
+        Core::Field { obj, name, .. } => {
+            let v = eval_core(interp, obj, env)?;
+            match &v {
+                Value::Obj(fields) => fields.get(name).cloned().ok_or_else(|| {
+                    EvalError::Runtime(format!("フィールド '{name}' が存在しません"))
+                }),
+                _ => Err(EvalError::Runtime(format!(
+                    "フィールド '{name}' を obj 以外から取り出そうとしました"
+                ))),
+            }
+        }
+        Core::Do { binds, body, .. } => {
+            let mut vars: BTreeMap<Rc<str>, Value> = BTreeMap::new();
+            for b in binds {
+                let do_env = Env::child_of(env, vars.clone());
+                let v = eval_core(interp, &b.expr, &do_env)?;
+                if matches!(v, Value::Err(_)) {
+                    return Ok(v);
+                }
+                if b.name.as_ref() != "_" {
+                    let bound = match v {
+                        Value::Ok(inner) => *inner,
+                        other => other,
+                    };
+                    vars.insert(b.name.clone(), bound);
+                }
+            }
+            let do_env = Env::child_of(env, vars);
+            eval_core(interp, body, &do_env)
+        }
+        Core::EffectCall { effect, .. } => Err(EvalError::Runtime(format!(
+            "エフェクト '{effect}!' は P0 >インタープリタでは実行できません（P1）"
+        ))),
+        Core::Error { message, .. } => Err(EvalError::Runtime(message.clone())),
+    }
+}
+
+fn match_value(p: &Pat, v: &Value, binds: &mut BTreeMap<Rc<str>, Value>) -> bool {
+    match &p.kind {
+        PatKind::Wildcard => true,
+        PatKind::Var(name) => {
+            binds.insert(name.clone(), v.clone());
+            true
+        }
+        PatKind::Lit(lit) => structural_equal(lit, v),
+        PatKind::Or(ps) => {
+            for sub in ps {
+                let mut sub_binds = BTreeMap::new();
+                if match_value(sub, v, &mut sub_binds) {
+                    binds.extend(sub_binds);
+                    return true;
+                }
+            }
+            false
+        }
+        PatKind::Obj(fields) => {
+            let Value::Obj(obj) = v else {
+                return false;
+            };
+            for (name, sub) in fields {
+                let Some(fv) = obj.get(name) else {
+                    return false;
+                };
+                if !match_value(sub, fv, binds) {
+                    return false;
+                }
+            }
+            true
+        }
+        PatKind::Array(elements) => {
+            let Value::Array(arr) = v else {
+                return false;
+            };
+            if arr.len() != elements.len() {
+                return false;
+            }
+            elements
+                .iter()
+                .zip(arr.iter())
+                .all(|(el, av)| match_value(el, av, binds))
+        }
+    }
+}
+
+pub fn stdlib_env() -> Rc<Env> {
+    let env = Env::new();
+    let def = |name: &str, kind: BuiltinKind| {
+        env.define(
+            Rc::from(name),
+            Value::Builtin(Rc::new(Builtin {
+                name: Rc::from(name),
+                kind,
+            })),
+        );
+    };
+    def("+", BuiltinKind::Add);
+    def("-", BuiltinKind::Sub);
+    def("*", BuiltinKind::Mul);
+    def("/", BuiltinKind::Div);
+    def("<", BuiltinKind::Lt);
+    def(">", BuiltinKind::Gt);
+    def("<=", BuiltinKind::Le);
+    def(">=", BuiltinKind::Ge);
+    def("=", BuiltinKind::Eq);
+    def("mod", BuiltinKind::Mod);
+    def("abs", BuiltinKind::Abs);
+    def("min", BuiltinKind::Min);
+    def("max", BuiltinKind::Max);
+    def("not", BuiltinKind::Not);
+    def("str", BuiltinKind::Str);
+    def("str-concat", BuiltinKind::StrConcat);
+    def("str-slice", BuiltinKind::StrSlice);
+    def("len", BuiltinKind::Len);
+    def("contains?", BuiltinKind::Contains);
+    def("split", BuiltinKind::Split);
+    def("array", BuiltinKind::Array);
+    def("nth", BuiltinKind::Nth);
+    def("count", BuiltinKind::Count);
+    def("slice", BuiltinKind::Slice);
+    def("push", BuiltinKind::Push);
+    def("concat", BuiltinKind::Concat);
+    def("map", BuiltinKind::Map);
+    def("filter", BuiltinKind::Filter);
+    def("fold-left", BuiltinKind::FoldLeft);
+    def("find", BuiltinKind::Find);
+    def("any?", BuiltinKind::Any);
+    def("all?", BuiltinKind::All);
+    def("ok", BuiltinKind::Ok);
+    def("err", BuiltinKind::Err);
+    def("bind", BuiltinKind::Bind);
+    def("map-result", BuiltinKind::MapResult);
+    def("traverse", BuiltinKind::Traverse);
+    env
+}
+
+pub fn global_env() -> Rc<Env> {
+    stdlib_env()
+}
+
+pub fn load_defs(defs: &[CoreDef], env: &Rc<Env>) {
+    for d in defs {
+        if let CoreDef::Defn {
+            name,
+            params,
+            body,
+            ..
+        } = d
+        {
+            env.define(
+                name.clone(),
+                Value::Closure(Rc::new(Closure {
+                    params: params.clone(),
+                    body: Rc::new(body.clone()),
+                    env: env.clone(),
+                    name: Some(name.clone()),
+                })),
+            );
+        }
+    }
+}
+
 pub struct ExampleResult {
-    pub name: String,
+    pub index: usize,
     pub pass: bool,
-    pub actual: Option<Value>,
-    pub expected: Option<Value>,
+    pub actual: Value,
+    pub expected: Value,
 }
 
-pub fn eval(_core: &Core, _env: &Env) -> Result<Value, Vec<Diagnostic>> {
-    unimplemented!("eval: SPEC §8 — P0 未実装")
+pub fn run_examples(
+    interp: &mut Interp,
+    defs: &[CoreDef],
+    env: &Rc<Env>,
+) -> Result<Vec<ExampleResult>, EvalError> {
+    let mut results = Vec::new();
+    let mut index = 0;
+    for d in defs {
+        if let CoreDef::Example {
+            actual, expected, ..
+        } = d
+        {
+            let a = eval_core(interp, actual, env)?;
+            let e = eval_core(interp, expected, env)?;
+            let pass = structural_equal(&a, &e);
+            results.push(ExampleResult {
+                index,
+                pass,
+                actual: a,
+                expected: e,
+            });
+            index += 1;
+        }
+    }
+    Ok(results)
 }
 
-pub fn run_examples(_examples: &[(String, Core, Core)], _env: &Env) -> Vec<ExampleResult> {
-    unimplemented!("eval: example実行 — P0 未実装")
+pub fn load_file(
+    path: &str,
+    env: &Rc<Env>,
+    seen: &mut BTreeSet<String>,
+) -> Result<Vec<CoreDef>, EvalError> {
+    if !seen.insert(path.to_string()) {
+        return Ok(Vec::new());
+    }
+    let src = std::fs::read_to_string(path)
+        .map_err(|e| EvalError::Runtime(format!("ファイルを読めません: '{path}': {e}")))?;
+    let lex = tokenize(&src, path);
+    let (program, _) = parse_program(&lex);
+    let (defs, _) = desugar(&program);
+    for d in &defs {
+        if let CoreDef::Import { path: import_path, .. } = d {
+            if let Some(target) = resolve_import_path(path, import_path) {
+                load_file(&target, env, seen)?;
+            }
+        }
+    }
+    load_defs(&defs, env);
+    Ok(defs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::{check_file, ModuleCache};
+
+    fn fixture_path(name: &str) -> String {
+        format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), name)
+    }
+
+    fn defs_of(src: &str) -> Vec<CoreDef> {
+        let lex = tokenize(src, "test.lts");
+        let (program, _) = parse_program(&lex);
+        desugar(&program).0
+    }
+
+    fn call_src(src: &str, fn_name: &str, args: Vec<Value>) -> Result<Value, EvalError> {
+        let env = global_env();
+        load_defs(&defs_of(src), &env);
+        let f = env.lookup(fn_name).expect("関数が未定義です");
+        let mut interp = Interp::new();
+        interp.apply(f, args)
+    }
+
+    fn load_fixture(name: &str) -> (Rc<Env>, Vec<CoreDef>) {
+        let env = global_env();
+        let mut seen = BTreeSet::new();
+        let defs = load_file(&fixture_path(name), &env, &mut seen).expect("load");
+        (env, defs)
+    }
+
+    fn obj(pairs: Vec<(&str, Value)>) -> Value {
+        Value::Obj(pairs.into_iter().map(|(k, v)| (Rc::from(k), v)).collect())
+    }
+
+    fn money(amount: f64, currency: &str) -> Value {
+        obj(vec![
+            ("amount", Value::Num(amount)),
+            ("currency", Value::Str(Rc::from(currency))),
+        ])
+    }
+
+    #[test]
+    fn money_lts_example_passes() {
+        let (env, defs) = load_fixture("money.lts");
+        let mut interp = Interp::new();
+        let results = run_examples(&mut interp, &defs, &env).expect("examples");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].pass, "{:?} vs {:?}", results[0].actual, results[0].expected);
+        assert!(structural_equal(
+            &results[0].actual,
+            &Value::Ok(Box::new(money(3.0, "JPY")))
+        ));
+    }
+
+    #[test]
+    fn cart_lts_example_place_order_empty_cart() {
+        let (env, defs) = load_fixture("cart.lts");
+        let mut interp = Interp::new();
+        let results = run_examples(&mut interp, &defs, &env).expect("examples");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].pass);
+        assert!(structural_equal(
+            &results[0].actual,
+            &Value::Err(Box::new(obj(vec![("tag", Value::Str(Rc::from("EmptyCart")))])))
+        ));
+    }
+
+    #[test]
+    fn add_money_ok_and_err() {
+        let (env, _) = load_fixture("money.lts");
+        let add_money = env.lookup("add-money").expect("add-money");
+        let mut interp = Interp::new();
+        let r = interp
+            .apply(add_money.clone(), vec![money(1.0, "JPY"), money(2.0, "JPY")])
+            .expect("ok");
+        assert_eq!(r, Value::Ok(Box::new(money(3.0, "JPY"))));
+        let r = interp
+            .apply(add_money, vec![money(1.0, "JPY"), money(2.0, "USD")])
+            .expect("err");
+        assert_eq!(
+            r,
+            Value::Err(Box::new(Value::Str(Rc::from("currency mismatch: JPY vs USD"))))
+        );
+    }
+
+    #[test]
+    fn t3_do_early_return_total_not_called() {
+        let (env, _) = load_fixture("cart.lts");
+        let place_order = env.lookup("place-order").expect("place-order");
+        let mut interp = Interp::new();
+        let r = interp
+            .apply(place_order, vec![Value::Array(vec![])])
+            .expect("eval");
+        assert!(matches!(r, Value::Err(_)));
+        let calls = interp.calls();
+        assert!(!calls.contains_key("total"), "total は呼ばれてはいけない: {calls:?}");
+        assert!(calls.contains_key("check-items"));
+        assert!(calls.contains_key("place-order"));
+    }
+
+    #[test]
+    fn match_evaluates_scrutinee_once_and_binds() {
+        let f = |args: Vec<Value>| {
+            call_src(
+                "(defn f (x : number) : string (match x [0 \"zero\"] [n (str-concat \"n=\" (str n))]))",
+                "f",
+                args,
+            )
+        };
+        assert_eq!(f(vec![Value::Num(0.0)]).expect("ok"), Value::Str(Rc::from("zero")));
+        assert_eq!(f(vec![Value::Num(3.0)]).expect("ok"), Value::Str(Rc::from("n=3")));
+        let g = |v: Value| {
+            call_src(
+                "(defn g (e : (obj (tag : string))) : string (match e [(obj (tag \"EmptyCart\")) \"empty\"] [_ \"other\"]))",
+                "g",
+                vec![v],
+            )
+        };
+        assert_eq!(
+            g(obj(vec![("tag", Value::Str(Rc::from("EmptyCart")))]))
+                .expect("ok"),
+            Value::Str(Rc::from("empty"))
+        );
+        assert_eq!(
+            g(obj(vec![("tag", Value::Str(Rc::from("X")))]))
+                .expect("ok"),
+            Value::Str(Rc::from("other"))
+        );
+    }
+
+    #[test]
+    fn and_or_short_circuit() {
+        assert_eq!(
+            call_src("(defn f () : bool (and false boom))", "f", vec![]).expect("ok"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            call_src("(defn f () : bool (or true boom))", "f", vec![]).expect("ok"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call_src("(defn f () : bool (and true false))", "f", vec![]).expect("ok"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            call_src("(defn f () : bool (or false true))", "f", vec![]).expect("ok"),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn let_if_field_pipe_obj() {
+        assert_eq!(
+            call_src("(defn f () : number (let [a 1 b 2] (+ a b)))", "f", vec![]).expect("ok"),
+            Value::Num(3.0)
+        );
+        assert_eq!(
+            call_src("(defn f () : string (if true \"yes\" \"no\"))", "f", vec![]).expect("ok"),
+            Value::Str(Rc::from("yes"))
+        );
+        assert_eq!(
+            call_src(
+                "(defn f (o : (obj (a : number) (b : number))) : number o.a)",
+                "f",
+                vec![obj(vec![("a", Value::Num(10.0)), ("b", Value::Num(20.0))])]
+            )
+            .expect("ok"),
+            Value::Num(10.0)
+        );
+        assert_eq!(
+            call_src(
+                "(defn g () : number (-> (obj (a 1)) (fn (o : (obj (a : number))) : number o.a)))",
+                "g",
+                vec![]
+            )
+            .expect("ok"),
+            Value::Num(1.0)
+        );
+    }
+
+    #[test]
+    fn division_by_zero_is_infinity_or_nan() {
+        let inf = call_src("(defn f () : number (/ 1 0))", "f", vec![]).expect("ok");
+        assert_eq!(inf, Value::Num(f64::INFINITY));
+        let nan = call_src("(defn f () : number (/ 0 0))", "f", vec![]).expect("ok");
+        assert!(matches!(nan, Value::Num(n) if n.is_nan()));
+    }
+
+    #[test]
+    fn fact_lts_recursion() {
+        let mut cache = ModuleCache::default();
+        let r = check_file(&fixture_path("fact.lts"), &mut cache);
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+        let (env, _) = load_fixture("fact.lts");
+        let fact = env.lookup("fact").expect("fact");
+        let mut interp = Interp::new();
+        assert_eq!(
+            interp.apply(fact.clone(), vec![Value::Num(5.0)]).expect("ok"),
+            Value::Num(120.0)
+        );
+        assert_eq!(
+            interp.apply(fact, vec![Value::Num(0.0)]).expect("ok"),
+            Value::Num(1.0)
+        );
+    }
+
+    #[test]
+    fn recursion_depth_limit_is_internal_error() {
+        let handle = std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(|| {
+                let (env, _) = load_fixture("deep-add.lts");
+                let add_money = env.lookup("add-money").expect("add-money");
+                let mut interp = Interp::new();
+                let r = interp.apply(add_money, vec![Value::Num(20000.0)]);
+                matches!(r, Err(EvalError::Internal(_)))
+            })
+            .expect("spawn");
+        assert!(
+            handle.join().expect("join"),
+            "深さ上限超過は internal-error のはず"
+        );
+    }
 }
