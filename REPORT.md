@@ -125,3 +125,38 @@ M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実
 - **テスト**: unit 8件（`src/names.rs`: camelCase/PascalCase/snake_case 検出、`_` 許可、kebab 名（add-money/contains?/x2）許可、全位置の網羅検出、dotted セグメント、check_source 経由）、ゴールデン `tests/golden/name-convention.diagnostics.json`（再現ケースの診断 JSON、fix 含む）、CLI テスト `cli_compile_camel_case_exits_1_with_name_convention_and_fix`（exit 1 + kind + template）、スモーク `bash scripts/lists-smoke.sh` → **20/20（S3 PASS）**。
 - **既存ソースの確認（報告事項）**: 全17 fixtures と付録A/B の全 lisp ソースを compile し name-convention 診断 0件を確認。型名の PascalCase（`Money`/`CartItem` 等）は §6.6 の型名前空間の分離と付録A/B の規範例により仕様上正当と判断したため、型名前空間には大文字ルールを適用していない（fixture は無変更）。もし型名も kebab-case に統一したい場合は別途採用指示を乞う（差分提案レベルの意味論変更のため本件では未変更）。
 - **回帰**: `cargo test` 193件全パス（T1–T11 文言無変更、golden 既存ファイル無変更）、`LISTS_BACKEND=mock` acceptance 全パス、warning 0。依存・unsafe・unwrap/expect 制約は継続遵守。
+
+---
+
+## 10. M19 (P1 defn! 完全実装)
+
+対象は SPEC.md がすでに P1 として規定する範囲（§7.2 eff 集合、§7.4 検査規則、§7.5、§12.3 末尾 `!`、§12.4 lowering、§12.6 host DI）。本マイルストーンでは「採用済み」と明記された新規文言がないため **SPEC.md は無変更**。T1–T11・既存ゴールデンも無変更（t6.effects.diagnostics.json を含む全ゴールデンが byte 一致で通ることを確認）。
+
+### 実装
+
+- **IR** (`src/ir.rs`): `Core::EffectCall` に `host: Rc<str>` を追加（囲んでいる defn! の第1引数名。defn! の外では空文字）。`src/desugar.rs` が defn! 本体の脱糖時にのみ記録する。
+- **検査** (`src/effects.rs`, `src/check.rs`):
+  - eff の不动点を計算し、純粋 defn がエフェクトへ到達可能なら `effect-violation`。直接の EffectCall は従来どおり span=呼び出し位置・fix=`defn!` 置換（t6 ゴールデン不変）。defn→defn! の直接呼び出しと、純粋経由の間接到達（§7.4「逆は禁止」＋§7.2 eff(defn)=∅ MUST）も呼び出し位置で `effect-violation`（同じ fix）。
+  - エフェクト呼び出しを含むのに引数のない defn! → host 不足の `effect-violation`。example 等 defn! 外の EffectCall → host が無いため `effect-violation`。
+  - defn! の第1引数（host）の型が obj なら、各 EffectCall のハンドラフィールドを effect 宣言シグネチャと unify で検査（`src/check.rs` `check_host_handlers`）。
+  - do>bind の EffectCall は defn! 内のみ Result 要件を免除（§7.4 rule 5 の括弧書き「エフェクト呼び出しは P1 で例外的に許可」どおり）。純粋 defn では従来どおり type-mismatch も出る（t6 不変）。束縛値は interp と同じく「Ok なら中身、それ以外はそのまま」。
+  - purity をモジュール間で伝播: `ModuleResult.defn_purity` を追加し import で merge（`src/check.rs`）。
+- **インタープリタ** (`src/eval.rs`): EffectCall は host obj の `effect` フィールドのハンドラを apply（§12.4 と同じ host 経由）。host 未束縛・フィールド欠落は runtime error。
+- **JS 生成** (`src/emit.rs`): defn! → `async function`、host は第1引数のまま渡る（§12.6「グローバル注入禁止」を維持）。EffectCall → `await host.<js_name(effect)>(args)`（§12.4）。async 文脈では App/EffectCall を `(await ...)` で包む（非同期でない値への await は恒等）。エフェクトまたは impure 呼び出しを含む lam のみ `async` arrow。do の EffectCall bind は nil-safe な Err 早期 return と Ok 時のみ `.value` 取り出し（interp と一致）。example は「モジュールが async を含むときだけ」`await` 付き（純粋モジュールの生成 JS はバイト無変更＝ money.js/cart.js ゴールデン不変）。トランポリンは async モジュールのみ `async $run`。末尾再帰の defn! は async `while(true)` ループで定数スタック（count-down 1e5 を node で実行成功）。
+- **backend** (`src/backends.rs`): frontend の check cache を共有し、全モジュールの defn_purity から `impure_names` を `EmitInput` に渡す（import 先の defn! 呼び出しも await 対象）。
+
+### 検証
+
+- `cargo test` **201 全パス**（新規 +8: emit 3, effects 5, backend 1, diff 1。P0 時代の「defn! はエラー」系テスト 2 本を P1 挙動に書き換え）。warning 0。
+- `LISTS_BACKEND=mock cargo test --test acceptance` 11/11（effect-run の diff は mock=interp 経由でも緑）。
+- `bash scripts/lists-smoke.sh` **20/20**。
+- `tests/fixtures/effect-run.lts`（新規: log!/db! を含む defn!、do 内エフェクト束縛、match、末尾再帰 count-down 1e5、example 3 本）を CLI `compile` → `node` で **3/3 ok**。生成 JS を 2 回コンパイルして一致（決定性）。interp vs JS の構造的一致は `diff::effect_run_diff_interp_vs_backend` で確認。
+- 依存・unsafe・ライブラリ経路の unwrap/expect 追加なし（新規コードは unwrap_or_else のみ）。
+
+### 残課題（差分提案。本マイルストーンでは SPEC 未変更・実装のみ）
+
+1. defn! 第1引数の命名を `host` に強制する MUST 文言（現状は任意名で、その名前がそのまま JS の host 変数になる）。
+2. host キーの命名: JS 側は obj フィールドと同じ `js_name`（kebab→snake_case。`db-write!` → `host.db_write`）。§12.3「効果名自体が host キー」を逐語にするなら `host["db-write"]` 形式への変更を提案。
+3. example/top-level での EffectCall 禁止を明文化する文言（現状は実装が `effect-violation` を出すのみ）。
+4. host の型が obj でない（型変数・別名など）場合にハンドラ検査をスキップする扱いの明文化。
+5. async モジュールの example は top-level await に依存すること（ESM 前提。export/import を一切含まない純粋 async モジュールでは Node のモジュール構文検出に依存）。

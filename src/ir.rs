@@ -17,7 +17,7 @@ pub enum Core {
     Match { scrutinee: Box<Core>, arms: Vec<MatchArm>, span: Span },
     Obj { fields: Vec<(Rc<str>, Core)>, span: Span },
     Field { obj: Box<Core>, name: Rc<str>, span: Span },
-    EffectCall { effect: Rc<str>, args: Vec<Core>, span: Span },
+    EffectCall { host: Rc<str>, effect: Rc<str>, args: Vec<Core>, span: Span },
     Do { binds: Vec<DoBind>, body: Box<Core>, span: Span },
     Error { message: String, span: Span },
 }

@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 
 use lists::check::{check_file, ModuleCache};
 use lists::desugar::{desugar, CoreDef};
-use lists::diagnostic::{DiagKind, Diagnostic};
+use lists::diagnostic::Diagnostic;
 use lists::emit::{emit, EmitInput, EmitOutput};
 use lists::lexer::tokenize;
 use lists::parser::parse_program;
@@ -40,6 +40,7 @@ fn emit_fixture(base: &str) -> Result<EmitOutput, Vec<Diagnostic>> {
         file: format!("{base}.js"),
         source_file: format!("{base}.lts"),
         type_names,
+        impure_names: BTreeSet::new(),
     })
 }
 
@@ -52,6 +53,7 @@ fn emit_src(src: &str, file: &str) -> Result<EmitOutput, Vec<Diagnostic>> {
         file: file.to_string(),
         source_file: "test.lts".to_string(),
         type_names: BTreeSet::new(),
+        impure_names: BTreeSet::new(),
     })
 }
 
@@ -158,17 +160,26 @@ fn cart_js_runs_empty_cart_err_in_node() {
     assert!(stdout.contains("\"tag\":\"EmptyCart\""), "{stdout}");
 }
 
-#[test]
-fn defn_bang_module_is_emit_error() {
-    let r = emit_src(
-        "(effect log : (fn (s : string) : nil))\n(defn! f (s : string) : nil (log! s))",
-        "test.js",
-    );
-    let errs = r.expect_err("defn! モジュールはエラーのはず");
-    assert!(errs
-        .iter()
-        .any(|d| d.kind == DiagKind::UnsupportedInP0 && d.message.contains("defn!")));
-}
+    #[test]
+    fn defn_bang_module_emits_async_and_runs_in_node() {
+        let src = "(effect log : (fn (s : string) : nil))\n(effect db : (fn (op : string) (key : string) : (Option string)))\n(type Host (obj (log : (fn (s : string) : nil)) (db : (fn (op : string) (key : string) : (Option string)))))\n(defn! run (host : Host) (x : number) : (Result number string) (do [_ (log! (str x))] [v (db! \"get\" (str x))] (match v [nil (ok x)] [s (ok (+ x 1))])))\n(example (run (obj (log (fn (s : string) : nil nil)) (db (fn (op : string) (key : string) : (Option string) nil))) 1) => (ok 1))\n(example (run (obj (log (fn (s : string) : nil nil)) (db (fn (op : string) (key : string) : (Option string) \"v\"))) 1) => (ok 2))";
+        let out = emit_src(src, "effect-run.js").expect("defn! は P1 で emit できる");
+        assert!(out.js.contains("async function run(host, x)"), "{}", out.js);
+        assert!(out.js.contains("await host.log("), "{}", out.js);
+        assert!(out.js.contains("const actual = (await run("), "{}", out.js);
+        let dir = temp_dir("defn-bang");
+        write_out(&dir, "effect-run", &out);
+        let r = run_node(&dir, &["effect-run.js"]);
+        let stdout = String::from_utf8_lossy(&r.stdout);
+        assert_eq!(
+            r.status.code(),
+            Some(0),
+            "stderr: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        assert!(stdout.contains("example 0: ok"), "{stdout}");
+        assert!(stdout.contains("example 1: ok"), "{stdout}");
+    }
 
 #[test]
 fn t8_deep_recursion_stack_trace_points_to_lts_line() {

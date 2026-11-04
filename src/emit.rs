@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::desugar::CoreDef;
 use crate::diagnostic::{DiagKind, Diagnostic, Severity};
+use crate::effects::{find_defn_calls, find_effect_calls};
 use crate::ir::Core;
 use crate::sourcemap_out::MapBuilder;
 use crate::span::Span;
@@ -86,6 +87,8 @@ pub struct EmitInput {
     pub file: String,
     pub source_file: String,
     pub type_names: BTreeSet<String>,
+    /// import 先も含む「defn! の名前」集合（async 生成の要否判定用。ローカルの defn! は pure フラグから自動で足す）。
+    pub impure_names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +125,51 @@ fn contains_error_node(e: &Core) -> bool {
     }
 }
 
+/// エフェクト名を host オブジェクトのプロパティアクセスにする（§12.3/§12.4）。
+/// host のフィールドは obj リテラルと同じく js_name で出力するので、ここも js_name に揃える。
+fn effect_prop(name: &str) -> String {
+    format!(".{}", js_name(name))
+}
+
+fn core_has_effect_call(e: &Core) -> bool {
+    let mut sites = Vec::new();
+    find_effect_calls(e, &mut sites);
+    !sites.is_empty()
+}
+
+fn core_calls_impure(e: &Core, impure: &BTreeSet<String>) -> bool {
+    let mut calls = Vec::new();
+    find_defn_calls(e, &mut calls);
+    calls.iter().any(|c| impure.contains(c.callee.as_ref()))
+}
+
+/// P1: defn!（またはエフェクト呼び出しを含む式）があるモジュールは async 生成を行う。
+fn defs_use_async(defs: &[CoreDef], impure: &BTreeSet<String>) -> bool {
+    for d in defs {
+        match d {
+            CoreDef::Defn { pure, body, .. } => {
+                if !pure || core_has_effect_call(body) || core_calls_impure(body, impure) {
+                    return true;
+                }
+            }
+            CoreDef::Example {
+                actual, expected, ..
+            } => {
+                if core_has_effect_call(actual) || core_has_effect_call(expected) {
+                    return true;
+                }
+            }
+            CoreDef::Prop { body, .. } => {
+                if core_has_effect_call(body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
     let mut errors: Vec<Diagnostic> = Vec::new();
     for d in &input.defs {
@@ -141,7 +189,6 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
             CoreDef::Defn {
                 name,
                 body,
-                pure,
                 span,
                 path,
                 ..
@@ -152,18 +199,6 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
                         severity: Severity::Error,
                         span: span.clone(),
                         message: format!("フォーム '{name}' にパースエラーの回復ノードが含まれます"),
-                        data: Some(json!({ "path": path })),
-                        fix: None,
-                    });
-                }
-                if !pure {
-                    errors.push(Diagnostic {
-                        kind: DiagKind::UnsupportedInP0,
-                        severity: Severity::Error,
-                        span: span.clone(),
-                        message: format!(
-                            "defn! '{name}' は P0 > JS 生成ではエラーです（P1 で完全実装 §7.5）"
-                        ),
                         data: Some(json!({ "path": path })),
                         fix: None,
                     });
@@ -196,7 +231,11 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
     if gen.uses_trampoline() {
         w.line("const $TAIL = Symbol(\"lists.tail\");");
         w.line("const $thunk = (f, args) => ({ [$TAIL]: true, f, args });");
-        w.line("function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = v.f(...v.args); } return v; }");
+        if gen.uses_async {
+            w.line("async function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = await v.f(...v.args); } return v; }");
+        } else {
+            w.line("function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = v.f(...v.args); } return v; }");
+        }
         w.line("");
     }
     for d in &forms {
@@ -444,6 +483,10 @@ struct Gen<'a> {
     tail_kinds: BTreeMap<String, TailKind>,
     scc_members: BTreeMap<String, BTreeSet<String>>,
     cur_tail: Option<TailCtx>,
+    impure_defs: BTreeSet<String>,
+    host_stack: Vec<String>,
+    in_async: bool,
+    uses_async: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -464,6 +507,18 @@ impl<'a> Gen<'a> {
             }
         }
         let analysis = analyze_tail(&input.defs);
+        let mut impure_defs: BTreeSet<String> = input.impure_names.clone();
+        for d in &input.defs {
+            if let CoreDef::Defn {
+                name,
+                pure: false,
+                ..
+            } = d
+            {
+                impure_defs.insert(name.to_string());
+            }
+        }
+        let uses_async = defs_use_async(&input.defs, &impure_defs);
         Gen {
             user_names,
             export_names,
@@ -475,6 +530,10 @@ impl<'a> Gen<'a> {
             tail_kinds: analysis.kinds,
             scc_members: analysis.scc_members,
             cur_tail: None,
+            impure_defs,
+            host_stack: Vec::new(),
+            in_async: false,
+            uses_async,
         }
     }
 
@@ -589,6 +648,7 @@ impl<'a> Gen<'a> {
                 params,
                 body,
                 span,
+                pure,
                 ..
             } => {
                 let exported = if self.export_names.contains(name.as_ref()) {
@@ -605,16 +665,28 @@ impl<'a> Gen<'a> {
                     .unwrap_or(TailKind::Normal);
                 let params_js = params.iter().map(|p| js_name(&p.name)).collect::<Vec<_>>().join(", ");
                 let param_names: Vec<String> = params.iter().map(|p| js_name(&p.name)).collect();
+                // P1 (§12.4/§12.6): defn! は async 関数。host は第1引数（§12.6）。
+                let async_kw = if *pure { "" } else { "async " };
+                let saved_host_len = self.host_stack.len();
+                if !*pure {
+                    let h = params
+                        .first()
+                        .map(|p| js_name(&p.name))
+                        .unwrap_or_else(|| "host".to_string());
+                    self.host_stack.push(h);
+                }
+                let saved_async = self.in_async;
+                self.in_async = !*pure;
                 match kind {
                     TailKind::Normal => {
                         w.map_at(span, Some(name));
-                        w.line(&format!("{exported}function {js}({params_js}) {{"));
+                        w.line(&format!("{exported}{async_kw}function {js}({params_js}) {{"));
                         self.stmt(body, "  ", w);
                         w.line("}");
                     }
                     TailKind::SelfLoop => {
                         w.map_at(span, Some(name));
-                        w.line(&format!("{exported}function {js}({params_js}) {{"));
+                        w.line(&format!("{exported}{async_kw}function {js}({params_js}) {{"));
                         w.map_at(span, None);
                         w.line("  while (true) {");
                         let saved = self.cur_tail.replace(TailCtx::SelfLoop {
@@ -634,17 +706,19 @@ impl<'a> Gen<'a> {
                             .cloned()
                             .unwrap_or_else(|| BTreeSet::from([name.to_string()]));
                         w.map_at(span, Some(name));
-                        w.line(&format!("function {inner}({params_js}) {{"));
+                        w.line(&format!("{async_kw}function {inner}({params_js}) {{"));
                         let saved = self.cur_tail.replace(TailCtx::Trampoline { members });
                         self.stmt(body, "  ", w);
                         self.cur_tail = saved;
                         w.line("}");
                         w.map_at(span, Some(name));
                         w.line(&format!(
-                            "{exported}function {js}({params_js}) {{ return $run({inner}({params_js})); }}"
+                            "{exported}{async_kw}function {js}({params_js}) {{ return $run({inner}({params_js})); }}"
                         ));
                     }
                 }
+                self.in_async = saved_async;
+                self.host_stack.truncate(saved_host_len);
             }
             CoreDef::Import {
                 path,
@@ -676,6 +750,9 @@ impl<'a> Gen<'a> {
                 let i = self.example_index;
                 self.example_index += 1;
                 let se = self.runtime_ref("structuralEqual");
+                // P1: モジュールが async を含む場合、example は defn! を呼びうるので await で包む。
+                let saved_async = self.in_async;
+                self.in_async = self.uses_async;
                 w.map_at(span, None);
                 w.line("{");
                 w.write("  const actual = ");
@@ -684,6 +761,7 @@ impl<'a> Gen<'a> {
                 w.write("  const expected = ");
                 self.expr(expected, "  ", w);
                 w.write(";\n");
+                self.in_async = saved_async;
                 w.line(&format!(
                     "  if (!{se}(actual, expected)) throw new Error(\"example {i} failed: \" + JSON.stringify(actual));"
                 ));
@@ -786,12 +864,27 @@ impl<'a> Gen<'a> {
         };
         for b in binds {
             let r = format!("$r{}", self.fresh());
+            let is_effect = matches!(b.expr, Core::EffectCall { .. });
             w.write(&format!("{ind}const {r} = "));
             self.expr(&b.expr, ind, w);
             w.write(";\n");
-            w.line(&format!("{ind}if ({r}.tag === \"Err\") return {r};"));
-            if b.name.as_ref() != "_" {
-                w.line(&format!("{ind}const {} = {r}.value;", js_name(&b.name)));
+            if is_effect {
+                // §7.4 rule 5: defn! 内のエフェクト呼び出しは Result とは限らない。interp と同じく
+                // Err なら早期 return、束縛値は Ok なら中身、それ以外はそのまま。
+                w.line(&format!(
+                    "{ind}if ({r} !== null && {r}.tag === \"Err\") return {r};"
+                ));
+                if b.name.as_ref() != "_" {
+                    w.line(&format!(
+                        "{ind}const {} = ({r} !== null && {r}.tag === \"Ok\") ? {r}.value : {r};",
+                        js_name(&b.name)
+                    ));
+                }
+            } else {
+                w.line(&format!("{ind}if ({r}.tag === \"Err\") return {r};"));
+                if b.name.as_ref() != "_" {
+                    w.line(&format!("{ind}const {} = {r}.value;", js_name(&b.name)));
+                }
             }
         }
         self.stmt(body, ind, w);
@@ -888,6 +981,18 @@ impl<'a> Gen<'a> {
     }
 
     fn expr(&mut self, e: &Core, ind: &str, w: &mut JsWriter) {
+        // async 文脈（defn! 本体やエフェクトを含む lam）では呼び出し結果が Promise になりうるので
+        // await で包む（§12.4 の `await host.name(args)` と同じ扱い）。非同期でない値への await は恒等。
+        if self.in_async && matches!(e, Core::App { .. } | Core::EffectCall { .. }) {
+            w.write("(await ");
+            self.expr_inner(e, ind, w);
+            w.write(")");
+            return;
+        }
+        self.expr_inner(e, ind, w);
+    }
+
+    fn expr_inner(&mut self, e: &Core, ind: &str, w: &mut JsWriter) {
         w.map_at(e.span(), None);
         match e {
             Core::Lit { value, .. } => w.write(&lit_js(value)),
@@ -900,9 +1005,14 @@ impl<'a> Gen<'a> {
                 params, body, ..
             } => {
                 let params_js = params.iter().map(|p| js_name(&p.name)).collect::<Vec<_>>().join(", ");
-                w.write(&format!("(({params_js}) => {{\n"));
+                let lam_async = core_has_effect_call(body) || core_calls_impure(body, &self.impure_defs);
+                let async_kw = if lam_async { "async " } else { "" };
+                w.write(&format!("({async_kw}({params_js}) => {{\n"));
                 let saved = self.cur_tail.take();
+                let saved_async = self.in_async;
+                self.in_async = lam_async;
                 self.stmt(body, &format!("{ind}  "), w);
+                self.in_async = saved_async;
                 self.cur_tail = saved;
                 w.write(&format!("{ind}}})"));
             }
@@ -953,11 +1063,19 @@ impl<'a> Gen<'a> {
             Core::Let {
                 name, rhs, body, ..
             } => {
-                w.write(&format!("(({}) => {{\n", js_name(name)));
-                self.stmt(body, &format!("{ind}  "), w);
-                w.write(&format!("{ind}}})("));
-                self.expr(rhs, ind, w);
-                w.write(")");
+                if self.in_async {
+                    w.write(&format!("(await (async ({}) => {{\n", js_name(name)));
+                    self.stmt(body, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})("));
+                    self.expr(rhs, ind, w);
+                    w.write("))");
+                } else {
+                    w.write(&format!("(({}) => {{\n", js_name(name)));
+                    self.stmt(body, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})("));
+                    self.expr(rhs, ind, w);
+                    w.write(")");
+                }
             }
             Core::If {
                 cond,
@@ -975,13 +1093,23 @@ impl<'a> Gen<'a> {
             }
             Core::Match { .. } => {
                 let s = format!("$s{}", self.fresh());
-                w.write(&format!("(({s}) => {{\n"));
-                self.match_tail(e, &format!("{ind}  "), w, Some(&s));
-                w.write(&format!("{ind}}})("));
-                if let Core::Match { scrutinee, .. } = e {
-                    self.expr(scrutinee, ind, w);
+                if self.in_async {
+                    w.write(&format!("(await (async ({s}) => {{\n"));
+                    self.match_tail(e, &format!("{ind}  "), w, Some(&s));
+                    w.write(&format!("{ind}}})("));
+                    if let Core::Match { scrutinee, .. } = e {
+                        self.expr(scrutinee, ind, w);
+                    }
+                    w.write("))");
+                } else {
+                    w.write(&format!("(({s}) => {{\n"));
+                    self.match_tail(e, &format!("{ind}  "), w, Some(&s));
+                    w.write(&format!("{ind}}})("));
+                    if let Core::Match { scrutinee, .. } = e {
+                        self.expr(scrutinee, ind, w);
+                    }
+                    w.write(")");
                 }
-                w.write(")");
             }
             Core::Obj { fields, .. } => {
                 w.write("{ ");
@@ -1000,16 +1128,42 @@ impl<'a> Gen<'a> {
                 w.write(&format!(").{}", js_name(name)));
             }
             Core::Do { .. } => {
-                w.write("(() => {\n");
-                self.do_stmt(e, &format!("{ind}  "), w);
-                w.write(&format!("{ind}}})()"));
+                if self.in_async {
+                    w.write("(await (async () => {\n");
+                    self.do_stmt(e, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})())"));
+                } else {
+                    w.write("(() => {\n");
+                    self.do_stmt(e, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})()"));
+                }
             }
-            Core::EffectCall { effect, .. } => {
-                w.write(&format!(
-                    "(() => {{ throw new Error({}); }})()",
-                    serde_json::to_string(&format!("エフェクト {effect}! は P0 では実行できません"))
+            Core::EffectCall { effect, args, .. } => {
+                if self.in_async {
+                    // §12.4: EffectCall -> `await host.name(args)`（host は囲む defn! の第1引数 §12.6）。
+                    // 外側の expr ラッパが (await ...) で包む。
+                    let h = self
+                        .host_stack
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| "host".to_string());
+                    w.write(&format!("{h}{}(", effect_prop(effect)));
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            w.write(", ");
+                        }
+                        self.expr(a, ind, w);
+                    }
+                    w.write(")");
+                } else {
+                    w.write(&format!(
+                        "(() => {{ throw new Error({}); }})()",
+                        serde_json::to_string(&format!(
+                            "エフェクト {effect}! は defn! 本体の外では実行できません"
+                        ))
                         .unwrap_or_else(|_| "\"effect\"".to_string())
-                ));
+                    ));
+                }
             }
             Core::Error { message, .. } => {
                 w.write(&format!(
@@ -1037,6 +1191,7 @@ mod tests {
             file: "test.js".to_string(),
             source_file: "test.lts".to_string(),
             type_names: BTreeSet::new(),
+            impure_names: BTreeSet::new(),
         })
     }
 
@@ -1073,12 +1228,34 @@ mod tests {
     }
 
     #[test]
-    fn defn_bang_is_unsupported_in_p0() {
-        let r = emit_src("(effect log : (fn (s : string) : nil))\n(defn! f (s : string) : nil (log! s))");
-        let errs = r.expect_err("defn! はエラーのはず");
-        assert!(errs
-            .iter()
-            .any(|d| d.kind == DiagKind::UnsupportedInP0 && d.message.contains("defn!")));
+    fn defn_bang_emits_async_function_with_host_call() {
+        let out = emit_src(
+            "(effect log : (fn (s : string) : nil))\n(defn! f (host : (obj (log : (fn (s : string) : nil)))) (s : string) : nil (log! s))",
+        )
+        .expect("defn! は P1 で生成できる");
+        assert!(out.js.contains("async function f(host, s)"), "{}", out.js);
+        assert!(out.js.contains("(await host.log(s))"), "{}", out.js);
+    }
+
+    #[test]
+    fn defn_bang_example_is_awaited_and_kebab_effect_uses_snake_case_key() {
+        let out = emit_src(
+            "(effect db-write : (fn (s : string) : nil))\n(defn! f (host : (obj (db-write : (fn (s : string) : nil)))) : nil (db-write! \"x\"))\n(example (f (obj (db-write (fn (s : string) : nil nil)))) => nil)",
+        )
+        .expect("emit");
+        assert!(out.js.contains("(await host.db_write(\"x\"))"), "{}", out.js);
+        assert!(out.js.contains("const actual = (await f("), "{}", out.js);
+    }
+
+    #[test]
+    fn pure_module_has_no_async_anywhere() {
+        let out = emit_src(
+            "(defn add-money (a : number) : number (+ a 1))\n(example (add-money 1) => 2)",
+        )
+        .expect("emit");
+        assert!(!out.js.contains("async"), "{}", out.js);
+        assert!(!out.js.contains("await"), "{}", out.js);
+        assert!(out.js.contains("const actual = add_money(1);"), "{}", out.js);
     }
 
     #[test]

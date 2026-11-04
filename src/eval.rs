@@ -421,10 +421,36 @@ fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, Eval
                 env = Env::child_of(&env, vars);
                 *body
             }
-            Core::EffectCall { effect, .. } => {
-                return Err(EvalError::Runtime(format!(
-                    "エフェクト '{effect}!' は P0 >インタープリタでは実行できません（P1）"
-                )))
+            Core::EffectCall {
+                host,
+                effect,
+                args,
+                ..
+            } => {
+                // P1 (§12.4/§12.6): EffectCall は host オブジェクトのハンドラを呼ぶ。
+                // host は囲んでいる defn! の第1引数として束縛されている。
+                let hv = env.lookup(host.as_ref()).ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "host '{host}' が束縛されていません（defn! の第1引数として host を渡してください §12.6）"
+                    ))
+                })?;
+                let handler = match &hv {
+                    Value::Obj(fields) => fields.get(effect.as_ref()).cloned().ok_or_else(|| {
+                        EvalError::Runtime(format!(
+                            "host にエフェクト '{effect}' のハンドラがありません"
+                        ))
+                    })?,
+                    _ => {
+                        return Err(EvalError::Runtime(format!(
+                            "host は obj である必要があります: '{host}'"
+                        )))
+                    }
+                };
+                let mut argv = Vec::with_capacity(args.len());
+                for a in &args {
+                    argv.push(eval_core(interp, a, &env)?);
+                }
+                return interp.apply(handler, argv);
             }
             Core::Error { message, .. } => return Err(EvalError::Runtime(message)),
         };

@@ -41,3 +41,11 @@ fn stdlib_edge_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["stdlib-edge.lts"], "stdlib-edge.lts");
 }
+
+// M19 (P1 defn! 完全実装): エフェクト呼び出しを含む defn! の差分テスト。
+// host は defn! の第1引数として example 内で明示的に渡す（SPEC §12.6）。
+#[test]
+fn effect_run_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["effect-run.lts"], "effect-run.lts");
+}
