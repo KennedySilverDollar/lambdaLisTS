@@ -148,6 +148,25 @@ fn cli_compile_broken_exits_1_with_parse_error_json() {
 }
 
 #[test]
+fn cli_compile_camel_case_exits_1_with_name_convention_and_fix() {
+    let dir = temp_dir("compile-name-convention");
+    let target = dir.join("bad-name.lts");
+    std::fs::write(&target, "(export badName)\n(defn badName (x : number) : number x)\n")
+        .expect("write");
+    let out = run_lists(
+        &["compile", target.to_str().expect("utf8"), "--out", dir.to_str().expect("utf8")],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let diags: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout is Diagnostic[] JSON");
+    let arr = diags.as_array().expect("array");
+    let nc: Vec<&serde_json::Value> = arr.iter().filter(|d| d["kind"] == "name-convention").collect();
+    assert_eq!(nc.len(), 2, "{stdout}");
+    assert!(nc.iter().all(|d| d["fix"]["template"] == "bad-name"), "{stdout}");
+}
+
+#[test]
 fn cli_fmt_in_place_idempotent() {
     let dir = temp_dir("fmt");
     let target = dir.join("money.lts");

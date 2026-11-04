@@ -63,7 +63,10 @@ pub fn check_source(src: &str, file: &str, cache: &mut ModuleCache) -> ModuleRes
     let (program, mut diags) = parse_program(&lex);
     let (defs, _desugar_diags) = desugar(&program);
     let mut res = check_program(&defs, file, cache);
+    let type_names: BTreeSet<Rc<str>> = res.type_aliases.keys().cloned().collect();
+    let mut name_diags = crate::names::check(&program, &type_names);
     diags.append(&mut res.diagnostics);
+    diags.append(&mut name_diags);
     res.diagnostics = diags;
     res
 }

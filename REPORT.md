@@ -110,3 +110,18 @@ M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実
 
 - **検証**: `tests/fixtures/stdlib-edge.lts` は example 70件（旧36 + 新規34）すべて interp vs JS backend（`--backend js`）で一致し、期待値とも一致（`diff::stdlib_edge_diff_interp_vs_backend`）。`cargo test` 183件全パス、`LISTS_BACKEND=mock` でも全パス。T1–T11・golden は無変更。
 - **残課題（持ち越し）**: `split("")` の空区切りの食い違い（Rust は `["","a","b","c",""]`、JS は `["a","b","c"]`）は §11.6 の5件の範囲外のため未修正。`str` 印字で JS の `{tag,value}` 形状と2キー obj が区別不能な点は §11.6 に注意として記載済み。
+
+---
+
+## 9. name-convention 検査の実装（スモーク S3 で発見された仕様・実装ギャップ）
+
+- **発見経緯**: 実用確認スクリプト `scripts/lists-smoke.sh` の S3（name-convention）で、camelCase の defn 名が診断 `[]`・exit 0 で受理されることが判明（再現: `(export badName)` + `(defn badName (x : number) : number x)`）。SPEC は §2.3（シンボル名は kebab-case MUST）、§9.1（kind name-convention、フェーズ=検査）、§9.3（fix テンプレート MUST、kebab-case 変換）を要求しており、実装が追いついていなかった。なお `scripts/lists-smoke.sh` はリポジトリに存在しなかったため本件で新設した（S1–S20、S3 が name-convention: kind + `fix.template === "bad-name"` を検査）。
+- **根拠条文**: §2.3（kebab-case MUST、`_` 単体はワイルドカード専用）、§9.1（name-convention は検査フェーズ）、§9.3（fix は kebab-case 変換テンプレート MUST）、§10.2（path は AST パス）、§6.6（型名前空間と値名前空間の分離）。
+- **実装** (`src/names.rs`, `check_source` から検査フェーズ（AST 構築後）で実行。パーサ回復（Error ノード）とは独立に動作し、1ファイル内の全違反を報告):
+  - 検出規則（値名前空間）: 大文字を含むか `_` を含む（`_` 単体は除く）場合に severity=error の name-convention。`-`・数字・末尾 `?` は正当。
+  - 型名前空間（type 定義名・型位置の alias・import/export の型名）: PascalCase が規範（§6.6 と付録A/B の型名の例）なので大文字自体は違反にせず、snake_case（`_` 含む）と camelCase（小文字始まりで大文字含む）のみ違反とする。import/export 名は「大文字を含むか type_aliases に存在すれば型名」と分類し、import 失敗時の誤報を回避。
+  - 対象位置: defn/defn! 名、type 名、effect 名、param 名、let/do bind 名、fn param 名、obj フィールド名（構築・パターン・型の両方）、match パターン変数名、import/export シンボル、dotted-symbol の各セグメント。
+  - fix: `Patch::Replace { path, template }`、path は §10.2 の AST パス（例: `(defn badName)`、`(export).names.0`）、template は kebab 変換名（badName→bad-name、bad_name→bad-name）。
+- **テスト**: unit 8件（`src/names.rs`: camelCase/PascalCase/snake_case 検出、`_` 許可、kebab 名（add-money/contains?/x2）許可、全位置の網羅検出、dotted セグメント、check_source 経由）、ゴールデン `tests/golden/name-convention.diagnostics.json`（再現ケースの診断 JSON、fix 含む）、CLI テスト `cli_compile_camel_case_exits_1_with_name_convention_and_fix`（exit 1 + kind + template）、スモーク `bash scripts/lists-smoke.sh` → **20/20（S3 PASS）**。
+- **既存ソースの確認（報告事項）**: 全17 fixtures と付録A/B の全 lisp ソースを compile し name-convention 診断 0件を確認。型名の PascalCase（`Money`/`CartItem` 等）は §6.6 の型名前空間の分離と付録A/B の規範例により仕様上正当と判断したため、型名前空間には大文字ルールを適用していない（fixture は無変更）。もし型名も kebab-case に統一したい場合は別途採用指示を乞う（差分提案レベルの意味論変更のため本件では未変更）。
+- **回帰**: `cargo test` 193件全パス（T1–T11 文言無変更、golden 既存ファイル無変更）、`LISTS_BACKEND=mock` acceptance 全パス、warning 0。依存・unsafe・unwrap/expect 制約は継続遵守。
