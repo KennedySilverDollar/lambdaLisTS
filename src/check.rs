@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use serde_json::json;
@@ -116,6 +116,7 @@ pub struct Checker<'a> {
     scope: Vec<BTreeMap<Rc<str>, Type>>,
     next_var_id: usize,
     stdlib: BTreeMap<Rc<str>, Scheme>,
+    predef: BTreeSet<Rc<str>>,
 }
 
 impl<'a> Checker<'a> {
@@ -131,6 +132,7 @@ impl<'a> Checker<'a> {
             scope: Vec::new(),
             next_var_id: 1,
             stdlib: stdlib(),
+            predef: BTreeSet::new(),
         }
     }
 
@@ -155,13 +157,57 @@ impl<'a> Checker<'a> {
                 self.aliases.insert(name.clone(), ty.clone());
             }
         }
+        // Load imports first so defn signatures can reference imported names and types.
+        for d in defs {
+            if let CoreDef::Import {
+                path,
+                names,
+                span,
+            } = d
+            {
+                self.load_import(path, names, span);
+            }
+        }
+        // Register defn signatures up front so mutually recursive defns in the same file can reference each other.
+        for d in defs {
+            if let CoreDef::Defn {
+                name,
+                params,
+                ret,
+                span,
+                path,
+                ..
+            } = d
+            {
+                if self.values.contains_key(name)
+                    || self.effects.contains_key(name)
+                    || !self.predef.insert(name.clone())
+                {
+                    self.diag(
+                        DiagKind::DuplicateDefinition,
+                        span.clone(),
+                        format!("値名前空間の '{name}' は既に定義されています"),
+                        Some(json!({ "path": path })),
+                        None,
+                        Severity::Error,
+                    );
+                    continue;
+                }
+                let param_types: Vec<Type> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()])))
+                    .collect();
+                let ret_t = self.resolve(ret, span, &ast_path(path, &["ret"]));
+                self.values.insert(
+                    name.clone(),
+                    Type::FnT(param_types, Box::new(ret_t)),
+                );
+            }
+        }
         for d in defs {
             match d {
-                CoreDef::Import {
-                    path,
-                    names,
-                    span,
-                } => self.load_import(path, names, span),
+                CoreDef::Import { .. } => {}
                 CoreDef::Export { names, .. } => exports.extend(names.iter().cloned()),
                 CoreDef::Type { .. } => {}
                 CoreDef::Effect {
@@ -314,7 +360,9 @@ impl<'a> Checker<'a> {
         else {
             return;
         };
-        if self.values.contains_key(name) || self.effects.contains_key(name) {
+        if !self.predef.contains(name)
+            && (self.values.contains_key(name) || self.effects.contains_key(name))
+        {
             self.diag(
                 DiagKind::DuplicateDefinition,
                 span.clone(),
@@ -325,16 +373,22 @@ impl<'a> Checker<'a> {
             );
             return;
         }
-        let param_types: Vec<Type> = params
-            .iter()
-            .enumerate()
-            .map(|(i, p)| self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()])))
-            .collect();
-        let ret_t = self.resolve(ret, span, &ast_path(path, &["ret"]));
-        self.values.insert(
-            name.clone(),
-            Type::FnT(param_types.clone(), Box::new(ret_t.clone())),
-        );
+        let (param_types, ret_t) = match self.values.get(name) {
+            Some(Type::FnT(ps, r)) if self.predef.contains(name) => (ps.to_vec(), (**r).clone()),
+            _ => {
+                let param_types: Vec<Type> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()])))
+                    .collect();
+                let ret_t = self.resolve(ret, span, &ast_path(path, &["ret"]));
+                self.values.insert(
+                    name.clone(),
+                    Type::FnT(param_types.clone(), Box::new(ret_t.clone())),
+                );
+                (param_types, ret_t)
+            }
+        };
         let frame: BTreeMap<Rc<str>, Type> = params
             .iter()
             .zip(param_types.iter())

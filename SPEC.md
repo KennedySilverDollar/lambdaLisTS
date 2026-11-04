@@ -525,7 +525,8 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 
 ### 8.5 再帰
 
-- 末尾呼び出しは最適化すべき（SHOULD）。JSバックエンドではループ変換。
+- Core IR 上の末尾位置は次のとおりとする（MUST）: `Lam.body`、`Let.body`、`If.then`/`If.else_`、`Match` 各アームの `body`、`Do.body`。`App.f`・`App.args`・`Let.rhs`・`If.cond`・`Match.scrutinee`・`Obj` フィールド値・`Field.obj`・`Do` 各 bind の `expr` は末尾ではない。
+- **proper tail call（末尾位置にある `App`）は定数スタックで実行される（MUST）**。すなわち深さに依らず成功しなければならない。JS バックエンドでは自己再帰のループ変換と相互再帰のトランポリンで実現する。WASM バックエンドでは tail-call proposal の `return_call`/`return_call_indirect` に対応する。
 - 非末尾再帰のスタック制限は実装依存。Rust 実装では上限を定数として設け、超えた場合 internal-error 診断を返す（パニックしない）。上限値をドキュメントに明記。
 
 ### 8.6 数値と実行時エラー

@@ -1,0 +1,11 @@
+;; M12: 相互再帰 — JS ではトランポリン、インタープリタでは末尾ループで定数スタック（SPEC §8.5 MUST）
+(export is-even is-odd)
+
+(defn is-even (n : number) : bool
+  (if (= n 0) true (is-odd (- n 1))))
+
+(defn is-odd (n : number) : bool
+  (if (= n 0) false (is-even (- n 1))))
+
+(example (is-even 1000000) => true)
+(example (is-odd 7) => true)

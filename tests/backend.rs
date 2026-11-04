@@ -195,3 +195,94 @@ fn t8_deep_recursion_stack_trace_points_to_lts_line() {
     });
     assert_eq!(hit, Some(true), "トレースに fact.lts:<行> が必要: {stderr}");
 }
+
+#[test]
+fn tail_self_recursion_is_constant_stack_in_node() {
+    let out = emit_fixture("tail-self").expect("emit tail-self");
+    let dir = temp_dir("tail-self");
+    write_out(&dir, "tail-self", &out);
+    std::fs::write(
+        dir.join("run.js"),
+        "import { count_down } from \"./tail-self.js\";\nconst r = count_down(1000000, 0);\nif (r !== 1000000) throw new Error(\"unexpected: \" + r);\nconsole.log(\"count_down(1000000) = \" + r);\n",
+    )
+    .expect("write run.js");
+    let r = run_node(&dir, &["run.js"]);
+    assert_eq!(
+        r.status.code(),
+        Some(0),
+        "10^6 の末尾自己再帰がスタックオーバーフローした: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert!(stdout.contains("count_down(1000000) = 1000000"), "{stdout}");
+}
+
+#[test]
+fn tail_mutual_recursion_is_constant_stack_in_node() {
+    let out = emit_fixture("tail-mutual").expect("emit tail-mutual");
+    let dir = temp_dir("tail-mutual");
+    write_out(&dir, "tail-mutual", &out);
+    std::fs::write(
+        dir.join("run.js"),
+        "import { is_even } from \"./tail-mutual.js\";\nconst r = is_even(1000000);\nif (r !== true) throw new Error(\"unexpected: \" + r);\nconsole.log(\"is_even(1000000) = \" + r);\n",
+    )
+    .expect("write run.js");
+    let r = run_node(&dir, &["run.js"]);
+    assert_eq!(
+        r.status.code(),
+        Some(0),
+        "10^6 の相互再帰がスタックオーバーフローした: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert!(stdout.contains("is_even(1000000) = true"), "{stdout}");
+}
+
+#[test]
+fn generated_js_shape_for_tail_calls() {
+    let self_out = emit_fixture("tail-self").expect("emit tail-self");
+    assert!(self_out.js.contains("while (true)"), "{}", self_out.js);
+    assert!(self_out.js.contains("continue;"), "{}", self_out.js);
+    assert!(!self_out.js.contains("$thunk"), "{}", self_out.js);
+
+    let mut_out = emit_fixture("tail-mutual").expect("emit tail-mutual");
+    assert!(mut_out.js.contains("$thunk("), "{}", mut_out.js);
+    assert!(mut_out.js.contains("function $run("), "{}", mut_out.js);
+    assert!(mut_out.js.contains("is_even$inner"), "{}", mut_out.js);
+    assert!(mut_out.js.contains("is_odd$inner"), "{}", mut_out.js);
+    assert!(mut_out.js.contains("export function is_even("), "{}", mut_out.js);
+
+    let fact = emit_fixture("fact").expect("emit fact");
+    assert!(!fact.js.contains("while (true)"), "{}", fact.js);
+    assert!(!fact.js.contains("$thunk"), "{}", fact.js);
+}
+
+#[test]
+fn source_map_covers_loop_converted_tail_call() {
+    let out = emit_fixture("tail-self").expect("emit tail-self");
+    let map = sourcemap::SourceMap::from_slice(out.map.as_bytes()).expect("parse map");
+    let js_lines: Vec<&str> = out.js.lines().collect();
+    let arg_line = js_lines
+        .iter()
+        .position(|l| l.contains("const $a1 ="))
+        .expect("arg temp line");
+    let mut found = false;
+    for token in map.tokens() {
+        if token.get_dst_line() as usize == arg_line {
+            assert_eq!(token.get_src_line(), 4, "tail call は lts 5行目(0始まりで4)に対応するはず");
+            found = true;
+        }
+    }
+    assert!(found, "ループ変換された引数評価行に source map マッピングが必要: {}", out.map);
+
+    let mut_out = emit_fixture("tail-mutual").expect("emit tail-mutual");
+    let mmap = sourcemap::SourceMap::from_slice(mut_out.map.as_bytes()).expect("parse map");
+    let thunk_line = mut_out.js.lines().position(|l| l.contains("return $thunk(")).expect("thunk line");
+    let mut found = false;
+    for token in mmap.tokens() {
+        if token.get_dst_line() as usize == thunk_line {
+            found = true;
+        }
+    }
+    assert!(found, "トランポリンの thunk 行に source map マッピングが必要");
+}

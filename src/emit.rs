@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 
@@ -187,6 +187,12 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
         w.write(&header);
     }
     let mut gen = Gen::new(input);
+    if gen.uses_trampoline() {
+        w.line("const $TAIL = Symbol(\"lists.tail\");");
+        w.line("const $thunk = (f, args) => ({ [$TAIL]: true, f, args });");
+        w.line("function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = v.f(...v.args); } return v; }");
+        w.line("");
+    }
     for d in &forms {
         gen.form_js(d, &mut w);
     }
@@ -251,6 +257,176 @@ impl JsWriter {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TailKind {
+    Normal,
+    SelfLoop,
+    Trampoline,
+}
+
+#[derive(Clone)]
+enum TailCtx {
+    SelfLoop { fn_js: String, params: Vec<String> },
+    Trampoline { members: BTreeSet<String> },
+}
+
+enum TailCallee {
+    Defn(String),
+    Indirect,
+}
+
+// Core IR 上の末尾位置（SPEC §8.5）にある App の呼び出し先を集める。
+fn collect_tail_callees(
+    e: &Core,
+    in_tail: bool,
+    defn_names: &BTreeSet<String>,
+    import_names: &BTreeSet<String>,
+    out: &mut Vec<TailCallee>,
+) {
+    match e {
+        Core::App { f, args, .. } => {
+            if in_tail {
+                match f.as_ref() {
+                    Core::Var { name, .. } => {
+                        if defn_names.contains(name.as_ref()) {
+                            out.push(TailCallee::Defn(name.to_string()));
+                        } else if !RUNTIME_EXPORTS.contains(&name.as_ref())
+                            && !stdlib().contains_key(name.as_ref())
+                            && !import_names.contains(name.as_ref())
+                        {
+                            out.push(TailCallee::Indirect);
+                        }
+                    }
+                    _ => out.push(TailCallee::Indirect),
+                }
+            }
+            collect_tail_callees(f, false, defn_names, import_names, out);
+            for a in args {
+                collect_tail_callees(a, false, defn_names, import_names, out);
+            }
+        }
+        // ラムダは独立した関数として Normal に出力するので、ここでは回収しない
+        Core::Lam { .. } => {}
+        Core::Let { rhs, body, .. } => {
+            collect_tail_callees(rhs, false, defn_names, import_names, out);
+            collect_tail_callees(body, in_tail, defn_names, import_names, out);
+        }
+        Core::If {
+            cond,
+            then,
+            else_,
+            ..
+        } => {
+            collect_tail_callees(cond, false, defn_names, import_names, out);
+            collect_tail_callees(then, in_tail, defn_names, import_names, out);
+            collect_tail_callees(else_, in_tail, defn_names, import_names, out);
+        }
+        Core::Match { scrutinee, arms, .. } => {
+            collect_tail_callees(scrutinee, false, defn_names, import_names, out);
+            for arm in arms {
+                collect_tail_callees(&arm.body, in_tail, defn_names, import_names, out);
+            }
+        }
+        Core::Obj { fields, .. } => {
+            for (_, c) in fields {
+                collect_tail_callees(c, false, defn_names, import_names, out);
+            }
+        }
+        Core::Field { obj, .. } => collect_tail_callees(obj, false, defn_names, import_names, out),
+        Core::Do { binds, body, .. } => {
+            for b in binds {
+                collect_tail_callees(&b.expr, false, defn_names, import_names, out);
+            }
+            collect_tail_callees(body, in_tail, defn_names, import_names, out);
+        }
+        _ => {}
+    }
+}
+
+fn reachable(start: &str, graph: &BTreeMap<String, BTreeSet<String>>) -> BTreeSet<String> {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![start.to_string()];
+    while let Some(n) = stack.pop() {
+        if !seen.insert(n.clone()) {
+            continue;
+        }
+        if let Some(nexts) = graph.get(&n) {
+            for m in nexts {
+                stack.push(m.clone());
+            }
+        }
+    }
+    seen
+}
+
+struct TailAnalysis {
+    kinds: BTreeMap<String, TailKind>,
+    scc_members: BTreeMap<String, BTreeSet<String>>,
+}
+
+fn analyze_tail(defs: &[CoreDef]) -> TailAnalysis {
+    let defn_names: BTreeSet<String> = defs
+        .iter()
+        .filter_map(|d| match d {
+            CoreDef::Defn { name, .. } => Some(name.to_string()),
+            _ => None,
+        })
+        .collect();
+    let import_names: BTreeSet<String> = defs
+        .iter()
+        .filter_map(|d| match d {
+            CoreDef::Import { names, .. } => Some(names.iter().map(|n| n.to_string()).collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut callees: BTreeMap<String, Vec<TailCallee>> = BTreeMap::new();
+    for d in defs {
+        if let CoreDef::Defn { name, body, .. } = d {
+            let mut out = Vec::new();
+            collect_tail_callees(body, true, &defn_names, &import_names, &mut out);
+            let edges: BTreeSet<String> = out
+                .iter()
+                .filter_map(|c| match c {
+                    TailCallee::Defn(n) => Some(n.clone()),
+                    TailCallee::Indirect => None,
+                })
+                .collect();
+            graph.insert(name.to_string(), edges);
+            callees.insert(name.to_string(), out);
+        }
+    }
+    let mut kinds = BTreeMap::new();
+    let mut scc_members = BTreeMap::new();
+    for name in defn_names.iter() {
+        let out = &callees[name];
+        let edges = &graph[name];
+        let has_indirect = out.iter().any(|c| matches!(c, TailCallee::Indirect));
+        let self_edge = edges.contains(name);
+        let reach_from = reachable(name, &graph);
+        let members: BTreeSet<String> = graph
+            .keys()
+            .filter(|m| reach_from.contains(*m) && reachable(m, &graph).contains(name))
+            .cloned()
+            .collect();
+        let kind = if edges.is_empty() && !has_indirect {
+            TailKind::Normal
+        } else if members.len() > 1 {
+            TailKind::Trampoline
+        } else if self_edge && !has_indirect {
+            TailKind::SelfLoop
+        } else if has_indirect {
+            TailKind::Trampoline
+        } else {
+            TailKind::Normal
+        };
+        kinds.insert(name.clone(), kind);
+        scc_members.insert(name.clone(), members);
+    }
+    TailAnalysis { kinds, scc_members }
+}
+
 struct Gen<'a> {
     user_names: BTreeSet<String>,
     export_names: BTreeSet<String>,
@@ -259,6 +435,9 @@ struct Gen<'a> {
     example_index: usize,
     function_names: Vec<(String, String)>,
     type_names: &'a BTreeSet<String>,
+    tail_kinds: BTreeMap<String, TailKind>,
+    scc_members: BTreeMap<String, BTreeSet<String>>,
+    cur_tail: Option<TailCtx>,
 }
 
 impl<'a> Gen<'a> {
@@ -278,6 +457,7 @@ impl<'a> Gen<'a> {
                 _ => {}
             }
         }
+        let analysis = analyze_tail(&input.defs);
         Gen {
             user_names,
             export_names,
@@ -286,7 +466,16 @@ impl<'a> Gen<'a> {
             example_index: 0,
             function_names: Vec::new(),
             type_names: &input.type_names,
+            tail_kinds: analysis.kinds,
+            scc_members: analysis.scc_members,
+            cur_tail: None,
         }
+    }
+
+    fn uses_trampoline(&self) -> bool {
+        self.tail_kinds
+            .values()
+            .any(|k| matches!(k, TailKind::Trampoline))
     }
 
     fn fresh(&mut self) -> usize {
@@ -395,11 +584,53 @@ impl<'a> Gen<'a> {
                 };
                 let js = js_name(name);
                 self.function_names.push((js.clone(), name.to_string()));
-                w.map_at(span, Some(name));
+                let kind = self
+                    .tail_kinds
+                    .get(name.as_ref())
+                    .copied()
+                    .unwrap_or(TailKind::Normal);
                 let params_js = params.iter().map(|p| js_name(&p.name)).collect::<Vec<_>>().join(", ");
-                w.line(&format!("{exported}function {js}({params_js}) {{"));
-                self.stmt(body, "  ", w);
-                w.line("}");
+                let param_names: Vec<String> = params.iter().map(|p| js_name(&p.name)).collect();
+                match kind {
+                    TailKind::Normal => {
+                        w.map_at(span, Some(name));
+                        w.line(&format!("{exported}function {js}({params_js}) {{"));
+                        self.stmt(body, "  ", w);
+                        w.line("}");
+                    }
+                    TailKind::SelfLoop => {
+                        w.map_at(span, Some(name));
+                        w.line(&format!("{exported}function {js}({params_js}) {{"));
+                        w.map_at(span, None);
+                        w.line("  while (true) {");
+                        let saved = self.cur_tail.replace(TailCtx::SelfLoop {
+                            fn_js: js.clone(),
+                            params: param_names,
+                        });
+                        self.stmt(body, "    ", w);
+                        self.cur_tail = saved;
+                        w.line("  }");
+                        w.line("}");
+                    }
+                    TailKind::Trampoline => {
+                        let inner = format!("{js}$inner");
+                        let members = self
+                            .scc_members
+                            .get(name.as_ref())
+                            .cloned()
+                            .unwrap_or_else(|| BTreeSet::from([name.to_string()]));
+                        w.map_at(span, Some(name));
+                        w.line(&format!("function {inner}({params_js}) {{"));
+                        let saved = self.cur_tail.replace(TailCtx::Trampoline { members });
+                        self.stmt(body, "  ", w);
+                        self.cur_tail = saved;
+                        w.line("}");
+                        w.map_at(span, Some(name));
+                        w.line(&format!(
+                            "{exported}function {js}({params_js}) {{ return $run({inner}({params_js})); }}"
+                        ));
+                    }
+                }
             }
             CoreDef::Import {
                 path,
@@ -453,6 +684,55 @@ impl<'a> Gen<'a> {
 
     fn stmt(&mut self, e: &Core, ind: &str, w: &mut JsWriter) {
         w.map_at(e.span(), None);
+        if let Some(ctx) = self.cur_tail.clone() {
+            if let Core::App { f, args, .. } = e {
+                let is_self = match &ctx {
+                    TailCtx::SelfLoop { fn_js, .. } => {
+                        matches!(f.as_ref(), Core::Var { name, .. } if js_name(name) == *fn_js)
+                    }
+                    TailCtx::Trampoline { .. } => false,
+                };
+                if is_self || matches!(ctx, TailCtx::Trampoline { .. }) {
+                    match &ctx {
+                        TailCtx::SelfLoop { params, .. } => {
+                            let temps: Vec<String> =
+                                (0..args.len()).map(|_| format!("$a{}", self.fresh())).collect();
+                            for (t, a) in temps.iter().zip(args.iter()) {
+                                w.write(&format!("{ind}const {t} = "));
+                                self.expr(a, ind, w);
+                                w.write(";\n");
+                            }
+                            for (p, t) in params.iter().zip(temps.iter()) {
+                                w.line(&format!("{ind}{p} = {t};"));
+                            }
+                            w.line(&format!("{ind}continue;"));
+                        }
+                        TailCtx::Trampoline { members } => {
+                            let member = match f.as_ref() {
+                                Core::Var { name, .. } if members.contains(name.as_ref()) => {
+                                    Some(format!("{}$inner", js_name(name)))
+                                }
+                                _ => None,
+                            };
+                            w.write(&format!("{ind}return $thunk("));
+                            match member {
+                                Some(m) => w.write(&m),
+                                None => self.expr(f, ind, w),
+                            }
+                            w.write(", [");
+                            for (i, a) in args.iter().enumerate() {
+                                if i > 0 {
+                                    w.write(", ");
+                                }
+                                self.expr(a, ind, w);
+                            }
+                            w.write("]);\n");
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         match e {
             Core::Do { .. } => self.do_stmt(e, ind, w),
             Core::If {
@@ -607,7 +887,9 @@ impl<'a> Gen<'a> {
             } => {
                 let params_js = params.iter().map(|p| js_name(&p.name)).collect::<Vec<_>>().join(", ");
                 w.write(&format!("(({params_js}) => {{\n"));
+                let saved = self.cur_tail.take();
                 self.stmt(body, &format!("{ind}  "), w);
+                self.cur_tail = saved;
                 w.write(&format!("{ind}}})"));
             }
             Core::App { f, args, .. } => {
