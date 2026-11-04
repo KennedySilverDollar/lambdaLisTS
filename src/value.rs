@@ -231,4 +231,37 @@ mod tests {
             &Value::Ok(Box::new(Value::Nil))
         ));
     }
+    #[test]
+    fn structural_equal_edge_cases_against_appendix_c() {
+        // 空obj
+        assert!(structural_equal(&obj(vec![]), &obj(vec![])));
+        assert!(!structural_equal(&obj(vec![]), &obj(vec![("a", Value::Num(1.0))])));
+        // 深いネスト（配列/obj混在）
+        let deep = |v: f64| {
+            obj(vec![
+                ("arr", Value::Array(vec![Value::Num(v), obj(vec![("x", Value::Array(vec![Value::Bool(true)]))])])),
+                ("n", Value::Num(v)),
+            ])
+        };
+        assert!(structural_equal(&deep(1.0), &deep(1.0)));
+        assert!(!structural_equal(&deep(1.0), &deep(2.0)));
+        // 数値比較: NaN は NaN と等しくない（§8.3）。-0 と +0 は等しい（IEEE754 の == と同じ）
+        assert!(!structural_equal(&Value::Num(f64::NAN), &Value::Num(f64::NAN)));
+        assert!(structural_equal(&Value::Num(-0.0), &Value::Num(0.0)));
+        assert!(structural_equal(&Value::Num(1.0), &Value::Num(1.0)));
+        assert!(!structural_equal(&Value::Num(1.0), &Value::Num(2.0)));
+        // Result: tag と value の両方（ネスト含む）
+        assert!(structural_equal(
+            &Value::Ok(Box::new(Value::Array(vec![Value::Num(1.0)]))),
+            &Value::Ok(Box::new(Value::Array(vec![Value::Num(1.0)])))
+        ));
+        assert!(!structural_equal(
+            &Value::Ok(Box::new(Value::Num(1.0))),
+            &Value::Err(Box::new(Value::Num(1.0)))
+        ));
+        // 型が違えば false（Num vs Str、Array vs Obj）
+        assert!(!structural_equal(&Value::Array(vec![]), &obj(vec![])));
+        assert!(!structural_equal(&Value::Nil, &Value::Num(0.0)));
+    }
+
 }

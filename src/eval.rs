@@ -44,13 +44,6 @@ impl Interp {
                         c.params.len()
                     )));
                 }
-                self.depth += 1;
-                if self.depth > MAX_CALL_DEPTH {
-                    self.depth -= 1;
-                    return Err(EvalError::Internal(format!(
-                        "再帰深さの上限 {MAX_CALL_DEPTH} を超えました（§8.5）"
-                    )));
-                }
                 if let Some(name) = &c.name {
                     *self.calls.entry(name.to_string()).or_insert(0) += 1;
                 }
@@ -61,9 +54,7 @@ impl Interp {
                     .zip(args)
                     .collect();
                 let env = Env::child_of(&c.env, vars);
-                let r = eval_core(self, &c.body, &env);
-                self.depth -= 1;
-                r
+                eval_core(self, &c.body, &env)
             }
             _ => Err(EvalError::Runtime(
                 "関数ではない値を呼び出しました".to_string(),
@@ -123,7 +114,7 @@ impl Interp {
             }
             BuiltinKind::StrSlice => {
                 let s: Vec<char> = str_v(&args[0])?.chars().collect();
-                let (a, b) = js_slice_bounds(s.len(), num(&args[1])?, num(&args[2])?);
+                let (a, b) = slice_bounds(s.len(), num(&args[1])?, num(&args[2])?);
                 Ok(Value::Str(Rc::from(s[a..b].iter().collect::<String>().as_str())))
             }
             BuiltinKind::Len => Ok(Value::Num(str_v(&args[0])?.chars().count() as f64)),
@@ -148,7 +139,7 @@ impl Interp {
             BuiltinKind::Count => Ok(Value::Num(arr_v(&args[0])?.len() as f64)),
             BuiltinKind::Slice => {
                 let arr = arr_v(&args[0])?;
-                let (a, b) = js_slice_bounds(arr.len(), num(&args[1])?, num(&args[2])?);
+                let (a, b) = slice_bounds(arr.len(), num(&args[1])?, num(&args[2])?);
                 Ok(Value::Array(arr[a..b].to_vec()))
             }
             BuiltinKind::Push => {
@@ -260,7 +251,7 @@ impl Interp {
     }
 }
 
-fn js_slice_bounds(len: usize, start: f64, end: f64) -> (usize, usize) {
+fn slice_bounds(len: usize, start: f64, end: f64) -> (usize, usize) {
     let len_f = len as f64;
     let s = if start.is_nan() {
         0.0
@@ -280,105 +271,162 @@ fn js_slice_bounds(len: usize, start: f64, end: f64) -> (usize, usize) {
 }
 
 pub fn eval_core(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, EvalError> {
-    match e {
-        Core::Lit { value, .. } => Ok(value.clone()),
-        Core::Var { name, .. } => env
-            .lookup(name)
-            .ok_or_else(|| EvalError::Runtime(format!("未束縛のシンボルです: '{name}'"))),
-        Core::Lam {
-            params, body, ..
-        } => Ok(Value::Closure(Rc::new(Closure {
-            params: params.clone(),
-            body: Rc::new((**body).clone()),
-            env: env.clone(),
-            name: None,
-        }))),
-        Core::App { f, args, .. } => {
-            let fv = eval_core(interp, f, env)?;
-            let mut argv = Vec::with_capacity(args.len());
-            for a in args {
-                argv.push(eval_core(interp, a, env)?);
+    interp.depth += 1;
+    if interp.depth > MAX_CALL_DEPTH {
+        interp.depth -= 1;
+        return Err(EvalError::Internal(format!(
+            "再帰深さの上限 {MAX_CALL_DEPTH} を超えました（§8.5）"
+        )));
+    }
+    let r = eval_loop(interp, e, env);
+    interp.depth -= 1;
+    r
+}
+
+// 末尾位置の式はループで評価する。proper tail call（末尾の App）はフレームを消費しない（SPEC §8.5 MUST）。
+fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, EvalError> {
+    let mut env = env.clone();
+    let mut cur = e.clone();
+    loop {
+        let next = match cur {
+            Core::Lit { value, .. } => return Ok(value),
+            Core::Var { name, .. } => {
+                return env
+                    .lookup(&name)
+                    .ok_or_else(|| EvalError::Runtime(format!("未束縛のシンボルです: '{name}'")))
             }
-            interp.apply(fv, argv)
-        }
-        Core::Let {
-            name, rhs, body, ..
-        } => {
-            let v = eval_core(interp, rhs, env)?;
-            let child = Env::child_of(env, BTreeMap::from([(name.clone(), v)]));
-            eval_core(interp, body, &child)
-        }
-        Core::If {
-            cond,
-            then,
-            else_,
-            ..
-        } => {
-            let c = eval_core(interp, cond, env)?;
-            match c {
-                Value::Bool(true) => eval_core(interp, then, env),
-                Value::Bool(false) => eval_core(interp, else_, env),
-                _ => Err(EvalError::Runtime(
-                    "if >条件式は bool でなければなりません".to_string(),
-                )),
+            Core::Lam {
+                params, body, ..
+            } => {
+                return Ok(Value::Closure(Rc::new(Closure {
+                    params,
+                    body: Rc::new(*body),
+                    env,
+                    name: None,
+                })))
             }
-        }
-        Core::Match {
-            scrutinee, arms, ..
-        } => {
-            let scrut = eval_core(interp, scrutinee, env)?;
-            for arm in arms {
-                let mut binds = BTreeMap::new();
-                if match_value(&arm.pattern, &scrut, &mut binds) {
-                    let child = Env::child_of(env, binds);
-                    return eval_core(interp, &arm.body, &child);
+            Core::App { f, args, .. } => {
+                let fv = eval_core(interp, &f, &env)?;
+                let mut argv = Vec::with_capacity(args.len());
+                for a in &args {
+                    argv.push(eval_core(interp, a, &env)?);
+                }
+                match fv {
+                    Value::Builtin(b) => return interp.apply_builtin(&b, argv),
+                    Value::Closure(c) => {
+                        if c.params.len() != argv.len() {
+                            return Err(EvalError::Runtime(format!(
+                                "引数の数が一致しません: '{}' は {} 引数",
+                                c.name.as_deref().unwrap_or("anonymous"),
+                                c.params.len()
+                            )));
+                        }
+                        if let Some(name) = &c.name {
+                            *interp.calls.entry(name.to_string()).or_insert(0) += 1;
+                        }
+                        let vars: BTreeMap<Rc<str>, Value> = c
+                            .params
+                            .iter()
+                            .map(|p| p.name.clone())
+                            .zip(argv)
+                            .collect();
+                        env = Env::child_of(&c.env, vars);
+                        (*c.body).clone()
+                    }
+                    _ => {
+                        return Err(EvalError::Runtime(
+                            "関数ではない値を呼び出しました".to_string(),
+                        ))
+                    }
                 }
             }
-            Err(EvalError::Runtime(
-                "match がどのアームにも合致しませんでした".to_string(),
-            ))
-        }
-        Core::Obj { fields, .. } => {
-            let mut map: BTreeMap<Rc<str>, Value> = BTreeMap::new();
-            for (name, expr) in fields {
-                map.insert(name.clone(), eval_core(interp, expr, env)?);
+            Core::Let {
+                name, rhs, body, ..
+            } => {
+                let v = eval_core(interp, &rhs, &env)?;
+                env = Env::child_of(&env, BTreeMap::from([(name, v)]));
+                *body
             }
-            Ok(Value::Obj(map))
-        }
-        Core::Field { obj, name, .. } => {
-            let v = eval_core(interp, obj, env)?;
-            match &v {
-                Value::Obj(fields) => fields.get(name).cloned().ok_or_else(|| {
-                    EvalError::Runtime(format!("フィールド '{name}' が存在しません"))
-                }),
-                _ => Err(EvalError::Runtime(format!(
-                    "フィールド '{name}' を obj 以外から取り出そうとしました"
-                ))),
-            }
-        }
-        Core::Do { binds, body, .. } => {
-            let mut vars: BTreeMap<Rc<str>, Value> = BTreeMap::new();
-            for b in binds {
-                let do_env = Env::child_of(env, vars.clone());
-                let v = eval_core(interp, &b.expr, &do_env)?;
-                if matches!(v, Value::Err(_)) {
-                    return Ok(v);
-                }
-                if b.name.as_ref() != "_" {
-                    let bound = match v {
-                        Value::Ok(inner) => *inner,
-                        other => other,
-                    };
-                    vars.insert(b.name.clone(), bound);
+            Core::If {
+                cond,
+                then,
+                else_,
+                ..
+            } => {
+                let c = eval_core(interp, &cond, &env)?;
+                match c {
+                    Value::Bool(true) => *then,
+                    Value::Bool(false) => *else_,
+                    _ => {
+                        return Err(EvalError::Runtime(
+                            "if >条件式は bool でなければなりません".to_string(),
+                        ))
+                    }
                 }
             }
-            let do_env = Env::child_of(env, vars);
-            eval_core(interp, body, &do_env)
-        }
-        Core::EffectCall { effect, .. } => Err(EvalError::Runtime(format!(
-            "エフェクト '{effect}!' は P0 >インタープリタでは実行できません（P1）"
-        ))),
-        Core::Error { message, .. } => Err(EvalError::Runtime(message.clone())),
+            Core::Match {
+                scrutinee, arms, ..
+            } => {
+                let scrut = eval_core(interp, &scrutinee, &env)?;
+                let mut matched: Option<(Core, BTreeMap<Rc<str>, Value>)> = None;
+                for arm in arms {
+                    let mut binds = BTreeMap::new();
+                    if match_value(&arm.pattern, &scrut, &mut binds) {
+                        matched = Some((arm.body, binds));
+                        break;
+                    }
+                }
+                let (body, binds) = matched.ok_or_else(|| {
+                    EvalError::Runtime("match がどのアームにも合致しませんでした".to_string())
+                })?;
+                env = Env::child_of(&env, binds);
+                body
+            }
+            Core::Obj { fields, .. } => {
+                let mut map: BTreeMap<Rc<str>, Value> = BTreeMap::new();
+                for (name, expr) in fields {
+                    map.insert(name, eval_core(interp, &expr, &env)?);
+                }
+                return Ok(Value::Obj(map));
+            }
+            Core::Field { obj, name, .. } => {
+                let v = eval_core(interp, &obj, &env)?;
+                return match &v {
+                    Value::Obj(fields) => fields.get(&name).cloned().ok_or_else(|| {
+                        EvalError::Runtime(format!("フィールド '{name}' が存在しません"))
+                    }),
+                    _ => Err(EvalError::Runtime(format!(
+                        "フィールド '{name}' を obj 以外から取り出そうとしました"
+                    ))),
+                };
+            }
+            Core::Do { binds, body, .. } => {
+                let mut vars: BTreeMap<Rc<str>, Value> = BTreeMap::new();
+                for b in &binds {
+                    let do_env = Env::child_of(&env, vars.clone());
+                    let v = eval_core(interp, &b.expr, &do_env)?;
+                    if matches!(v, Value::Err(_)) {
+                        return Ok(v);
+                    }
+                    if b.name.as_ref() != "_" {
+                        let bound = match v {
+                            Value::Ok(inner) => *inner,
+                            other => other,
+                        };
+                        vars.insert(b.name.clone(), bound);
+                    }
+                }
+                env = Env::child_of(&env, vars);
+                *body
+            }
+            Core::EffectCall { effect, .. } => {
+                return Err(EvalError::Runtime(format!(
+                    "エフェクト '{effect}!' は P0 >インタープリタでは実行できません（P1）"
+                )))
+            }
+            Core::Error { message, .. } => return Err(EvalError::Runtime(message)),
+        };
+        cur = next;
     }
 }
 
@@ -771,20 +819,40 @@ mod tests {
     }
 
     #[test]
-    fn recursion_depth_limit_is_internal_error() {
+    fn non_tail_recursion_depth_limit_is_internal_error() {
         let handle = std::thread::Builder::new()
             .stack_size(256 * 1024 * 1024)
             .spawn(|| {
-                let (env, _) = load_fixture("deep-add.lts");
-                let add_money = env.lookup("add-money").expect("add-money");
+                let (env, _) = load_fixture("fact.lts");
+                let fact = env.lookup("fact").expect("fact");
                 let mut interp = Interp::new();
-                let r = interp.apply(add_money, vec![Value::Num(20000.0)]);
+                let r = interp.apply(fact, vec![Value::Num(20000.0)]);
                 matches!(r, Err(EvalError::Internal(_)))
             })
             .expect("spawn");
         assert!(
             handle.join().expect("join"),
-            "深さ上限超過は internal-error のはず"
+            "非末尾再帰の深さ上限超過は internal-error であるべき"
         );
+    }
+
+    #[test]
+    fn tail_self_recursion_runs_in_constant_stack() {
+        let r = call_src(
+            "(defn loop (n : number) (acc : number) : number (if (= n 0) acc (loop (- n 1) (+ acc 1))))",
+            "loop",
+            vec![Value::Num(1_000_000.0), Value::Num(0.0)],
+        )
+        .expect("ok");
+        assert_eq!(r, Value::Num(1_000_000.0));
+    }
+
+    #[test]
+    fn tail_mutual_recursion_runs_in_constant_stack() {
+        let src = "(defn ev (n : number) : bool (if (= n 0) true (od (- n 1)))) (defn od (n : number) : bool (if (= n 0) false (ev (- n 1))))";
+        let r = call_src(src, "ev", vec![Value::Num(1_000_000.0)]).expect("ok");
+        assert_eq!(r, Value::Bool(true));
+        let r = call_src(src, "od", vec![Value::Num(1_000_001.0)]).expect("ok");
+        assert_eq!(r, Value::Bool(true));
     }
 }

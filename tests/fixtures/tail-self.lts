@@ -1,0 +1,7 @@
+;; M12: 末尾再帰（自己）— 10^6 回でも定数スタックで成功すること（SPEC §8.5 MUST）
+(export count-down)
+
+(defn count-down (n : number) (acc : number) : number
+  (if (= n 0) acc (count-down (- n 1) (+ acc 1))))
+
+(example (count-down 1000000 0) => 1000000)

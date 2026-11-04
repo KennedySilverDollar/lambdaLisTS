@@ -18,7 +18,7 @@ cargo test         # 全テスト: 単体 + 受け入れ T1–T9
 
 ```sh
 # コンパイル（診断は Diagnostic[] の JSON で stdout、exit 0/1。--out に .js/.js.map と runtime.js を出力）
-cargo run -- compile tests/fixtures/money.lts tests/fixtures/cart.lts --out /tmp/out
+cargo run -- compile tests/fixtures/money.lts tests/fixtures/cart.lts --out /tmp/out --backend js   # --backend はデフォルト js。差分テスト側は LISTS_BACKEND で切替
 node /tmp/out/cart.js          # example を実行して結果を表示
 
 # フォーマット（in-place）
@@ -40,10 +40,7 @@ op: `eval` / `test` / `prop` / `reload` / `type-of` / `quit`（§10.1）。
 - `defn!` はパース・型付け・エフェクト検査のみ受理。JS 生成時はエラー（`unsupported-in-p0`）、インタープリタでは EffectCall が実行時エラー（§7.5）。
 - `prop` は構文+型検査のみ。評価（反例生成・縮小）は P1。REPL の `prop` は `unsupported-in-p0` を返す。
 - `effect` 呼び出しの実行（ホスト DI）は P1。P0 では宣言の検査のみ。
-- 非末尾再帰のスタック制限は実装依存（§8.5）。実測値（Node.js v22.23.4、デフォルトスタック、この環境）:
-  - 生成 JS バックエンド: `fact` 換算で約 **7512** 段まで（`RangeError: Maximum call stack size exceeded`）
-  - インタープリタ: 約 **794** 段まで
-  - 末尾呼び出しは最適化しない（SHOULD、§8.5）。スタックオーバー時は JS の RangeError を指す実行時例外（§8.6）。
+- 再帰のスタック（§8.5。M12で更新）: proper tail call（末尾位置の `App`）は **定数スタックで実行される（MUST）**。実装: インタープリタは末尾ループ、JS は自己再帰のループ変換 + 相互再帰のトランポリン（生成JSで 10^8 回の末尾再帰も成功）。非末尾再帰の上限は実装依存のまま（実測: 生成JSで約 7512 段、インタープリタで MAX_CALL_DEPTH=10000 の internal-error）。スタックオーバー時は JS 側で RangeError を指す実行時例外（§8.6）。
 
 ## 既知の差異（SPEC.md とのズレ・未実装）
 
@@ -58,6 +55,10 @@ op: `eval` / `test` / `prop` / `reload` / `type-of` / `quit`（§10.1）。
 - **compile の診断順序**: lexer → parser → desugar → check → emit の順に連結して出力する。
 - **REPL の `test` の結果名**: example に名前がないため `example <index>` 形式で返す。
 - **`/ 0` 系**: `(/ 1 0)` = Infinity、`(/ 0 0)` = NaN であり例外にしない（§8.6）。`=` は構造的等価で NaN ≠ NaN（§8.3）。
+
+## ドキュメント
+
+- [docs/backends.md](backends.md) — 新バックエンド追加ガイド（Backend トレイトの3メソッドと差分テスト参加手順）
 
 ## ディレクトリ構成
 
@@ -88,5 +89,6 @@ src/
   fmt.rs          §10.3
   repl.rs         §10.1
   backend/runtime.js  生成JSが import するランタイム（唯一の非Rustソース）
+  backends.rs     Backend トレイト + js/mock（docs/backends.md 参照）
 tests/          cargo の統合テスト（fixtures/ + golden/ + acceptance/ T1–T9）
 ```

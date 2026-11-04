@@ -92,16 +92,7 @@ fn money_emit_is_deterministic_and_snapshot() {
     let r2 = emit_fixture("money").expect("emit money again");
     assert_eq!(r1.js, r2.js, "JS は決定的であること");
     assert_eq!(r1.map, r2.map, "source map は決定的であること");
-    assert!(r1.js.contains("export function add_money("), "{}", r1.js);
-    assert!(r1.js.contains("export function zero("), "{}", r1.js);
-    assert!(
-        r1.js.contains("import { ok, err, structuralEqual } from \"./runtime.js\";"),
-        "{}",
-        r1.js
-    );
-    assert!(r1.js.contains("const $stdlib_str_concat"), "{}", r1.js);
-    assert!(r1.js.contains("const $stdlib_add"), "{}", r1.js);
-    assert!(r1.js.contains("sourceMappingURL=money.js.map"), "{}", r1.js);
+    // 生成JSの文字列表現への直接検査は行わない（M14）。実行挙動は money_js_runs_example_in_node で検査済み。
     let map_json: serde_json::Value = serde_json::from_str(&r1.map).expect("map json");
     assert_eq!(map_json["version"], 3);
     assert_eq!(map_json["sources"], serde_json::json!(["money.lts"]));
@@ -112,12 +103,18 @@ fn money_emit_is_deterministic_and_snapshot() {
 #[test]
 fn cart_emit_imports_money_and_do_early_return() {
     let cart = emit_fixture("cart").expect("emit cart");
-    assert!(
-        cart.js.contains("import { add_money, zero } from \"./money.js\";"),
-        "{}",
-        cart.js
-    );
-    assert!(cart.js.contains(".tag === \"Err\") return $r"), "{}", cart.js);
+    // 挙動検査（M14: 生成JSの文字列ではなく実行結果で検証）: money.js と共にコンパイルして実行し、
+    // import 解決と do 早期リターンが結果として Err(EmptyCart) になることを確認する
+    let dir = temp_dir("cart-emit");
+    let money = emit_fixture("money").expect("emit money");
+    write_out(&dir, "money", &money);
+    write_out(&dir, "cart", &cart);
+    let r = run_node(&dir, &["cart.js"]);
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert_eq!(r.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&r.stderr));
+    assert!(stdout.contains("example 0: ok"), "{stdout}");
+    assert!(stdout.contains("\"tag\":\"Err\""), "{stdout}");
+    assert!(stdout.contains("\"tag\":\"EmptyCart\""), "{stdout}");
     assert_golden("cart.js", &cart.js);
     assert_golden("cart.js.map", &cart.map);
 }
@@ -183,10 +180,8 @@ fn t8_deep_recursion_stack_trace_points_to_lts_line() {
     let r = run_node(&dir, &["--enable-source-maps", "run.js"]);
     let stderr = String::from_utf8_lossy(&r.stderr);
     assert_ne!(r.status.code(), Some(0), "スタックオーバーフローで失敗するはず: {stderr}");
-    assert!(
-        stderr.contains("Maximum call stack size exceeded"),
-        "{stderr}"
-    );
+    // M14: JSエンジンのエラーメッセージ文言（"Maximum call stack size exceeded" 等）には依存しない。
+    // 検査対象は「スタックトレースが fact.lts の行を指すこと」のみ。
     let hit = stderr.find("fact.lts:").map(|i| {
         stderr[i..]
             .chars()
@@ -194,4 +189,179 @@ fn t8_deep_recursion_stack_trace_points_to_lts_line() {
             .is_some_and(|c| c.is_ascii_digit())
     });
     assert_eq!(hit, Some(true), "トレースに fact.lts:<行> が必要: {stderr}");
+}
+
+#[test]
+fn tail_self_recursion_is_constant_stack_in_node() {
+    let out = emit_fixture("tail-self").expect("emit tail-self");
+    let dir = temp_dir("tail-self");
+    write_out(&dir, "tail-self", &out);
+    std::fs::write(
+        dir.join("run.js"),
+        "import { count_down } from \"./tail-self.js\";\nconst r = count_down(1000000, 0);\nif (r !== 1000000) throw new Error(\"unexpected: \" + r);\nconsole.log(\"count_down(1000000) = \" + r);\n",
+    )
+    .expect("write run.js");
+    let r = run_node(&dir, &["run.js"]);
+    assert_eq!(
+        r.status.code(),
+        Some(0),
+        "10^6 の末尾自己再帰がスタックオーバーフローした: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert!(stdout.contains("count_down(1000000) = 1000000"), "{stdout}");
+}
+
+#[test]
+fn tail_mutual_recursion_is_constant_stack_in_node() {
+    let out = emit_fixture("tail-mutual").expect("emit tail-mutual");
+    let dir = temp_dir("tail-mutual");
+    write_out(&dir, "tail-mutual", &out);
+    std::fs::write(
+        dir.join("run.js"),
+        "import { is_even } from \"./tail-mutual.js\";\nconst r = is_even(1000000);\nif (r !== true) throw new Error(\"unexpected: \" + r);\nconsole.log(\"is_even(1000000) = \" + r);\n",
+    )
+    .expect("write run.js");
+    let r = run_node(&dir, &["run.js"]);
+    assert_eq!(
+        r.status.code(),
+        Some(0),
+        "10^6 の相互再帰がスタックオーバーフローした: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    assert!(stdout.contains("is_even(1000000) = true"), "{stdout}");
+}
+
+
+// M14: 生成JSの文字列表現への依存を排し、Backend トレイト経由の挙動検査に置き換える。
+#[test]
+fn tail_call_codegen_behaves_via_backend() {
+    let backend = lists::backends::lookup("js").expect("js backend");
+    for (fixture, expect_line) in [
+        ("tail-self", "count_down(1000000) = 1000000"),
+        ("tail-mutual", "is_even(1000000) = true"),
+    ] {
+        let dir = temp_dir(&format!("tail-behavior-{fixture}"));
+        let sources = vec![lists::backends::SourceFile {
+            path: PathBuf::from(fixture_path(&format!("{fixture}.lts"))),
+            name: format!("{fixture}.lts"),
+        }];
+        let artifacts = backend.compile(&sources, &dir).expect("compile");
+        let driver = match fixture {
+            "tail-self" => "import { count_down } from \"./tail-self.js\";\nconsole.log(\"count_down(1000000) = \" + count_down(1000000, 0));\n",
+            _ => "import { is_even } from \"./tail-mutual.js\";\nconsole.log(\"is_even(1000000) = \" + is_even(1000000));\n",
+        };
+        std::fs::write(dir.join("driver.js"), driver).expect("write driver");
+        let out = lists::backends::run_node_entry(&dir, "driver.js", &[]).expect("node");
+        assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains(expect_line), "{stdout}");
+        let _ = artifacts;
+    }
+}
+
+// M14 作業2: runtime.js の ok/err/structuralEqual が付録CのRust型定義と一致するかを、
+// JS実行結果とRust実装の突き合わせで検証する（空obj・ネスト・数値比較を含むエッジケース）。
+#[test]
+fn runtime_primitives_match_appendix_c_across_backends() {
+    let dir = temp_dir("runtime-prims");
+    std::fs::write(dir.join("runtime.js"), lists::runtime::RUNTIME_JS).expect("write runtime");
+    let script = r#"
+import { ok, err, structuralEqual } from "./runtime.js";
+const cases = [
+  ["empty-obj", {}, {}],
+  ["empty-vs-nonempty", {}, { a: 1 }],
+  ["nested", [[1, { a: [true] }]], [[1, { a: [true] }]]],
+  ["nested-diff", [[1, { a: [true] }]], [[1, { a: [false] }]]],
+  ["nan", NaN, NaN],
+  ["minus-zero", -0, 0],
+  ["num", 1, 1.0],
+  ["ok-ok", ok(1), ok(1)],
+  ["ok-err", ok(1), err(1)],
+  ["nil-nil", null, null],
+  ["nil-obj", null, {}],
+  ["str", "a", "a"],
+];
+for (const [name, a, b] of cases) console.log(name + " " + JSON.stringify(structuralEqual(a, b)));
+console.log("ok-shape " + JSON.stringify(ok(1)));
+console.log("err-shape " + JSON.stringify(err("e")));
+"#;
+    std::fs::write(dir.join("check.js"), script).expect("write check.js");
+    let out = run_node(&dir, &["check.js"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let got: std::collections::BTreeMap<String, String> = stdout
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    use lists::value::{structural_equal, Value};
+    use std::rc::Rc;
+    let obj = |pairs: Vec<(&str, Value)>| Value::Obj(pairs.into_iter().map(|(k, v)| (Rc::from(k), v)).collect());
+    let num = |n: f64| Value::Num(n);
+    let expected: Vec<(&str, bool)> = vec![
+        ("empty-obj", structural_equal(&obj(vec![]), &obj(vec![]))),
+        ("empty-vs-nonempty", structural_equal(&obj(vec![]), &obj(vec![("a", num(1.0))]))),
+        (
+            "nested",
+            structural_equal(
+                &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(true)]))])]),
+                &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(true)]))])]),
+            ),
+        ),
+        (
+            "nested-diff",
+            structural_equal(
+                &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(true)]))])]),
+                &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(false)]))])]),
+            ),
+        ),
+        ("nan", structural_equal(&num(f64::NAN), &num(f64::NAN))),
+        ("minus-zero", structural_equal(&num(-0.0), &num(0.0))),
+        ("num", structural_equal(&num(1.0), &num(1.0))),
+        ("ok-ok", structural_equal(&Value::Ok(Box::new(num(1.0))), &Value::Ok(Box::new(num(1.0))))),
+        ("ok-err", structural_equal(&Value::Ok(Box::new(num(1.0))), &Value::Err(Box::new(num(1.0))))),
+        ("nil-nil", structural_equal(&Value::Nil, &Value::Nil)),
+        ("nil-obj", structural_equal(&Value::Nil, &obj(vec![]))),
+        ("str", structural_equal(&Value::Str(Rc::from("a")), &Value::Str(Rc::from("a")))),
+    ];
+    for (name, want) in expected {
+        let js = got.get(name).unwrap_or_else(|| panic!("missing {name} in {stdout}"));
+        assert_eq!(js, &want.to_string(), "{name}: JS={js} Rust={want}");
+    }
+    // ok/err の形状は §12.5/付録C#6 の {tag, value} MUST
+    assert_eq!(got.get("ok-shape").map(String::as_str), Some("{\"tag\":\"Ok\",\"value\":1}"));
+    assert_eq!(got.get("err-shape").map(String::as_str), Some("{\"tag\":\"Err\",\"value\":\"e\"}"));
+}
+
+#[test]
+fn source_map_covers_loop_converted_tail_call() {
+    let out = emit_fixture("tail-self").expect("emit tail-self");
+    let map = sourcemap::SourceMap::from_slice(out.map.as_bytes()).expect("parse map");
+    let js_lines: Vec<&str> = out.js.lines().collect();
+    let arg_line = js_lines
+        .iter()
+        .position(|l| l.contains("const $a1 ="))
+        .expect("arg temp line");
+    let mut found = false;
+    for token in map.tokens() {
+        if token.get_dst_line() as usize == arg_line {
+            assert_eq!(token.get_src_line(), 4, "tail call は lts 5行目(0始まりで4)に対応するはず");
+            found = true;
+        }
+    }
+    assert!(found, "ループ変換された引数評価行に source map マッピングが必要: {}", out.map);
+
+    let mut_out = emit_fixture("tail-mutual").expect("emit tail-mutual");
+    let mmap = sourcemap::SourceMap::from_slice(mut_out.map.as_bytes()).expect("parse map");
+    let thunk_line = mut_out.js.lines().position(|l| l.contains("return $thunk(")).expect("thunk line");
+    let mut found = false;
+    for token in mmap.tokens() {
+        if token.get_dst_line() as usize == thunk_line {
+            found = true;
+        }
+    }
+    assert!(found, "トランポリンの thunk 行に source map マッピングが必要");
 }

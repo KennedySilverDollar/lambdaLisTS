@@ -68,6 +68,7 @@ lists/
 │   ├── eval.rs              # §8 正格評価, do早期リターン, example実行
 │   ├── emit.rs              # §12.4 lowering
 │   ├── runtime.rs           # runtime.js を include_str! で埋め込む
+│   ├── backends.rs          # Backend トレイト + js/mock バックエンド（M13: 差分テストの一般化）
 │   ├── sourcemap_out.rs     # sourcemap クレートによる v3 生成
 │   ├── fmt.rs               # §10.3 一意フォーマッタ
 │   └── repl.rs              # §10.1 JSON Lines
@@ -123,6 +124,8 @@ Node 実行は `std::process::Command` で `node --enable-source-maps` を呼ぶ
 | M9 | CLI + REPL + フォーマッタ | JSON Lines 往復、fmt 冪等 |
 | M10 | 差分一致ハーネス | T1–T7 自動緑 |
 | M11 | 受入 T1–T9 締めくくり | §13 全項目緑 |
+| M12 | proper tail call 定数スタック（§8.5 MUST） | 10^6 自己/相互再帰が interp/JS 双方で成功 |
+| M13 | Backend トレイト + `--backend` + モック | diff テストが任意バックエンドで実行可能（LISTS_BACKEND） |
 
 ## 9. 守ってはいけないこと
 

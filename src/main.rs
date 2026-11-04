@@ -1,20 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use lists::check::{check_file, ModuleCache};
-use lists::desugar::desugar;
+use lists::backends;
 use lists::diagnostic::{DiagKind, Diagnostic, Severity};
-use lists::emit::{emit, EmitInput};
 use lists::fmt::format_source;
-use lists::lexer::tokenize;
-use lists::parser::parse_program;
 use lists::repl;
-use lists::runtime::RUNTIME_JS;
 use lists::span::Span;
 use std::rc::Rc;
 
@@ -31,6 +25,9 @@ enum Commands {
         files: Vec<PathBuf>,
         #[arg(long)]
         out: Option<PathBuf>,
+        /// 実行/差分テスト対象のバックエンド（デフォルト: js）
+        #[arg(long, default_value = "js")]
+        backend: String,
     },
     Fmt {
         files: Vec<PathBuf>,
@@ -41,7 +38,11 @@ enum Commands {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Compile { files, out } => ExitCode::from(compile(&files, out.as_deref()) as u8),
+        Commands::Compile {
+            files,
+            out,
+            backend,
+        } => ExitCode::from(compile(&files, out.as_deref(), &backend) as u8),
         Commands::Fmt { files } => ExitCode::from(fmt_cmd(&files) as u8),
         Commands::Repl => {
             match repl::run() {
@@ -52,17 +53,6 @@ fn main() -> ExitCode {
                 }
             }
         }
-    }
-}
-
-fn out_path_for(file: &Path, out_dir: Option<&Path>) -> PathBuf {
-    let base = file
-        .file_name()
-        .map(|n| n.to_string_lossy().replace(".lts", ".js"))
-        .unwrap_or_else(|| "out.js".to_string());
-    match out_dir {
-        Some(d) => d.join(base),
-        None => file.parent().unwrap_or(Path::new("")).join(base),
     }
 }
 
@@ -83,8 +73,31 @@ fn read_diag(file: &str, message: String) -> Diagnostic {
     }
 }
 
-fn compile(files: &[PathBuf], out_dir: Option<&Path>) -> i32 {
-    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+fn compile(files: &[PathBuf], out_dir: Option<&Path>, backend_name: &str) -> i32 {
+    let Some(backend) = backends::lookup(backend_name) else {
+        let d = read_diag(
+            backend_name,
+            format!(
+                "unknown backend '{backend_name}' (available: {:?})",
+                backends::names()
+            ),
+        );
+        println!(
+            "{}",
+            serde_json::to_string(&vec![d]).unwrap_or_else(|_| "[]".to_string())
+        );
+        return 2;
+    };
+    let sources: Vec<backends::SourceFile> = files
+        .iter()
+        .map(|f| backends::SourceFile {
+            path: f.clone(),
+            name: f
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| f.to_string_lossy().into_owned()),
+        })
+        .collect();
     let out_root = match out_dir {
         Some(d) => {
             let _ = std::fs::create_dir_all(d);
@@ -95,62 +108,18 @@ fn compile(files: &[PathBuf], out_dir: Option<&Path>) -> i32 {
             .and_then(|f| f.parent().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from(".")),
     };
-    for file in files {
-        let file_s = file.to_string_lossy().into_owned();
-        let src = match std::fs::read_to_string(file) {
-            Ok(s) => s,
-            Err(e) => {
-                diagnostics.push(read_diag(&file_s, format!("ファイルを読めません: '{file_s}': {e}")));
-                continue;
-            }
-        };
-        let lex = tokenize(&src, &file_s);
-        let (program, parse_diags) = parse_program(&lex);
-        diagnostics.extend(lex.diagnostics.iter().cloned());
-        diagnostics.extend(parse_diags);
-        let (defs, ds_diags) = desugar(&program);
-        diagnostics.extend(ds_diags);
-        let mut cache = ModuleCache::default();
-        let checked = check_file(&file_s, &mut cache);
-        diagnostics.extend(checked.diagnostics.iter().cloned());
-        let type_names: BTreeSet<String> = checked.type_aliases.keys().map(|k| k.to_string()).collect();
-        let out_path = out_path_for(file, out_dir);
-        let out_name = out_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "out.js".to_string());
-        let source_name = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| file_s.clone());
-        match emit(&EmitInput {
-            defs,
-            file: out_name,
-            source_file: source_name,
-            type_names,
-        }) {
-            Ok(out) => {
-                if let Some(parent) = out_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&out_path, &out.js);
-                let _ = std::fs::write(format!("{}.map", out_path.display()), &out.map);
-            }
-            Err(errs) => diagnostics.extend(errs),
+    match backend.compile(&sources, &out_root) {
+        Ok(_artifacts) => {
+            println!("[]");
+            0
         }
-    }
-    let runtime_path = out_root.join("runtime.js");
-    if !runtime_path.exists() {
-        let _ = std::fs::write(&runtime_path, RUNTIME_JS);
-    }
-    println!(
-        "{}",
-        serde_json::to_string(&diagnostics).unwrap_or_else(|_| "[]".to_string())
-    );
-    if diagnostics.is_empty() {
-        0
-    } else {
-        1
+        Err(diags) => {
+            println!(
+                "{}",
+                serde_json::to_string(&diags).unwrap_or_else(|_| "[]".to_string())
+            );
+            1
+        }
     }
 }
 

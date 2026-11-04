@@ -1,36 +1,35 @@
 use super::common::*;
-use lists::value::print_value;
+
+// 差分テストはすべて Backend トレイト経由で実行する（M13）。
+// デフォルトは js。LISTS_BACKEND=<name> で別バックエンド（例: mock）に切り替えられる。
 
 #[test]
 fn t7_diff_interp_vs_js_backend() {
+    let backend = backend_from_env();
     for name in ["money.lts", "cart.lts", "cart-spy.lts"] {
-        let base = name.trim_end_matches(".lts");
-        let dir = temp_dir(&format!("diff-{base}"));
-        let names = if name == "money.lts" {
+        let names: Vec<&str> = if name == "money.lts" {
             vec!["money.lts"]
         } else {
             vec!["money.lts", name]
         };
-        compile_to_dir(&names, &dir);
-
-        let (defs, diags) = pipeline_file(&fixture_path(name));
-        assert!(diags.is_empty(), "{name}: {diags:?}");
-        let example_count = defs.iter().filter(|d| matches!(d, lists::desugar::CoreDef::Example { .. })).count();
-        assert!(example_count >= 1, "{name} に example が必要");
-
-        let js_values = node_example_values(&dir, base, example_count);
-        let interp = interp_example_values(&[name]);
-        assert_eq!(interp.len(), example_count, "{name}");
-        assert_eq!(js_values.len(), example_count, "{name}");
-        for (i, (pass, actual)) in interp.iter().enumerate() {
-            assert!(*pass, "{name} example {i}: インタープリタ側が pass していない: {}", print_value(actual));
-            let js_value = json_to_value(&js_values[i]);
-            assert!(
-                values_equal(actual, &js_value),
-                "{name} example {i} が不一致:\ninterp: {}\njs:    {}",
-                print_value(actual),
-                serde_json::to_string_pretty(&js_values[i]).expect("json")
-            );
-        }
+        assert_diff(&*backend, &names, name);
     }
+}
+
+#[test]
+fn t10_diff_deep_tail_recursion_interp_vs_js() {
+    let backend = backend_from_env();
+    for name in ["tail-self.lts", "tail-mutual.lts"] {
+        assert_diff(&*backend, &[name], name);
+    }
+}
+
+// モックバックエンド（インタープリタ結果をそのまま返す最小実装）でも
+// トレイト経由の差分テストが機能することの証明。将来の WASM 追加時も同じ手順で乗る。
+#[test]
+fn t11_diff_via_mock_backend() {
+    let backend = lists::backends::lookup("mock").expect("mock backend");
+    assert_eq!(backend.name(), "mock");
+    assert_diff(&*backend, &["money.lts"], "money.lts");
+    assert_diff(&*backend, &["money.lts", "cart.lts"], "cart.lts");
 }

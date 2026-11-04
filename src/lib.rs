@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod backends;
 pub mod check;
 pub mod desugar;
 pub mod diagnostic;

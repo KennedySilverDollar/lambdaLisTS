@@ -1,18 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::rc::Rc;
 
-use lists::check::{check_file, ModuleCache};
+use lists::backends::{self, Artifacts, Backend, SourceFile};
 use lists::desugar::{desugar, CoreDef};
 use lists::diagnostic::Diagnostic;
-use lists::emit::{emit, EmitInput};
 use lists::eval::{global_env, run_examples, Interp};
 use lists::lexer::tokenize;
 use lists::parser::parse_program;
 use lists::resolver::resolve_import_path;
-use lists::runtime::RUNTIME_JS;
-use lists::value::{structural_equal, Env, Value};
+use lists::value::{print_value, structural_equal, Env, Value};
 use serde_json::Value as Json;
 
 pub fn fixture_path(name: &str) -> String {
@@ -35,56 +33,38 @@ pub fn pipeline_file(abs: &str) -> (Vec<CoreDef>, Vec<Diagnostic>) {
     (defs, diags)
 }
 
-pub fn compile_to_dir(names: &[&str], dir: &Path) {
-    std::fs::write(dir.join("runtime.js"), RUNTIME_JS).expect("write runtime");
-    for name in names {
-        let abs = fixture_path(name);
-        let (defs, diags) = pipeline_file(&abs);
-        assert!(diags.is_empty(), "{name}: {diags:?}");
-        let mut cache = ModuleCache::default();
-        let checked = check_file(&abs, &mut cache);
-        assert!(
-            checked.diagnostics.is_empty(),
-            "{name}: {:?}",
-            checked.diagnostics
-        );
-        let type_names: BTreeSet<String> = checked.type_aliases.keys().map(|k| k.to_string()).collect();
-        let base = name.trim_end_matches(".lts");
-        let out = emit(&EmitInput {
-            defs,
-            file: format!("{base}.js"),
-            source_file: name.to_string(),
-            type_names,
+/// Backend トレイト経由でコンパイルする。
+pub fn compile_via(backend: &dyn Backend, names: &[&str], dir: &Path) -> Artifacts {
+    let sources: Vec<SourceFile> = names
+        .iter()
+        .map(|n| SourceFile {
+            path: PathBuf::from(fixture_path(n)),
+            name: n.to_string(),
         })
-        .unwrap_or_else(|errs| panic!("emit errors for {name}: {errs:?}"));
-        std::fs::write(dir.join(format!("{base}.js")), &out.js).expect("write js");
-        std::fs::write(dir.join(format!("{base}.js.map")), &out.map).expect("write map");
-    }
+        .collect();
+    backend
+        .compile(&sources, dir)
+        .unwrap_or_else(|errs| panic!("compile {names:?}: {errs:?}"))
 }
 
-pub fn run_node(file: &str, cwd: &Path, args: &[&str]) -> Output {
-    Command::new("node")
-        .args(args)
-        .arg(file)
-        .current_dir(cwd)
-        .output()
-        .expect("node を起動できること (Node.js >= 20)")
+pub fn compile_to_dir(names: &[&str], dir: &Path) {
+    compile_via(&backends::JsBackend, names, dir);
 }
 
-pub fn node_example_values(dir: &Path, base: &str, count: usize) -> Vec<Json> {
-    let r = run_node(&format!("{base}.js"), dir, &[]);
-    assert_eq!(
-        r.status.code(),
-        Some(0),
-        "node {base}.js failed: {}",
-        String::from_utf8_lossy(&r.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&r.stdout);
+/// テストランナーのバックエンド選択（環境変数 LISTS_BACKEND、デフォルト js）。
+pub fn backend_from_env() -> Box<dyn Backend> {
+    let name = std::env::var("LISTS_BACKEND").unwrap_or_else(|_| "js".to_string());
+    backends::lookup(&name)
+        .unwrap_or_else(|| panic!("unknown LISTS_BACKEND '{name}' (available: {:?})", backends::names()))
+}
+
+/// バックエンド実行の stdout から example 値を取り出す（`example N: ok <json>` 形式）。
+pub fn example_values_from_stdout(stdout: &str, count: usize) -> Vec<Json> {
     let mut values = Vec::new();
     for line in stdout.lines() {
         if let Some(rest) = line.strip_prefix("example ") {
             if let Some((_idx, rest)) = rest.split_once(": ok ") {
-                values.push(serde_json::from_str(rest).expect("example の JSON"));
+                values.push(serde_json::from_str(rest).expect("example > JSON"));
             }
         }
     }
@@ -92,6 +72,55 @@ pub fn node_example_values(dir: &Path, base: &str, count: usize) -> Vec<Json> {
         values.drain(..values.len() - count);
     }
     values
+}
+
+/// 差分テスト本体: インタープリタ vs 任意バックエンド。対象ケースは従来の T7/T10 と不変。
+pub fn assert_diff(backend: &dyn Backend, compile_names: &[&str], entry_name: &str) {
+    let base = entry_name.trim_end_matches(".lts");
+    let dir = temp_dir(&format!("diff-{base}"));
+    let artifacts = compile_via(backend, compile_names, &dir);
+
+    let (defs, diags) = pipeline_file(&fixture_path(entry_name));
+    assert!(diags.is_empty(), "{entry_name}: {diags:?}");
+    let example_count = defs
+        .iter()
+        .filter(|d| matches!(d, lists::desugar::CoreDef::Example { .. }))
+        .count();
+    assert!(example_count >= 1, "{entry_name} に example が必要");
+
+    let run = backend.run(&artifacts).expect("backend run");
+    assert_eq!(
+        run.code,
+        Some(0),
+        "{entry_name}: backend '{}' run failed: {}",
+        backend.name(),
+        run.stderr
+    );
+    let backend_values = example_values_from_stdout(&run.stdout, example_count);
+    let interp = interp_example_values(&[entry_name]);
+    assert_eq!(interp.len(), example_count, "{entry_name}");
+    assert_eq!(backend_values.len(), example_count, "{entry_name}");
+    for (i, (pass, actual)) in interp.iter().enumerate() {
+        assert!(
+            *pass,
+            "{entry_name} example {i}: インタープリタが pass していない: {}",
+            print_value(actual)
+        );
+        let backend_value = json_to_value(&backend_values[i]);
+        assert!(
+            values_equal(actual, &backend_value),
+            "{entry_name} example {i} が不一致:
+interp: {}
+backend({}): {}",
+            print_value(actual),
+            backend.name(),
+            serde_json::to_string_pretty(&backend_values[i]).expect("json")
+        );
+    }
+}
+
+pub fn run_node(file: &str, cwd: &Path, args: &[&str]) -> Output {
+    lists::backends::run_node_entry(cwd, file, args).expect("node を起動できること (Node.js >= 20)")
 }
 
 pub fn interp_example_values(names: &[&str]) -> Vec<(bool, Value)> {
