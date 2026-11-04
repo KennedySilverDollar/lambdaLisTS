@@ -50,3 +50,50 @@
 (example (= (array 1 2) (array 1 2)) => true)
 (example (= (obj (a 1)) (obj (a 1))) => true)
 (example (= (array 1) (array 1 2)) => false)
+
+;; --- 境界ケース追加（M16 採用(4) 詳細: min/max ±0・±Infinity、サロゲートペア、小数添字、str 数値表記・印字）---
+;; min/max: IEEE754 minNum/maxNum（Rust f64::min/max と一致）。±0 の順序と ±Infinity
+(example (str (min -0 0)) => "0")
+(example (str (max -0 0)) => "0")
+(example (str (min 0 -0)) => "-0")
+(example (str (max 0 -0)) => "-0")
+(example (str (min (/ 1 0) 5)) => "5")
+(example (str (max (/ -1 0) 5)) => "5")
+(example (str (min (/ 0 0) (/ 1 0))) => "Infinity")
+(example (str (max (/ 0 0) (/ -1 0))) => "-Infinity")
+(example (str (min 3 (/ 0 0))) => "3")
+
+;; len/str-slice: サロゲートペア境界（コードポイント単位。絵文字は 1）
+(example (len "😀") => 1)
+(example (len "a😀b") => 3)
+(example (str-slice "a😀b" 1 2) => "😀")
+(example (str-slice "😀😀" 1 2) => "😀")
+(example (str-slice "😀" 0 (/ 0 0)) => "😀")
+
+;; slice/str-slice: 小数の start/end は 0 方向に切り捨て（slice_bounds 内で trunc）
+(example (str-slice "abcdef" 1.9 4.2) => "bcd")
+(example (slice (array 1 2 3 4 5) 1.9 3.7) => (array 2 3))
+
+;; nth: 小数添字は 0 方向に切り捨て、負・範囲外・NaN は nil
+(example (= (nth (array 10 20 30) 0.5) (nth (array 10 20 30) 0)) => true)
+(example (= (nth (array 10 20 30) 2.99) (nth (array 10 20 30) 2)) => true)
+(example (= (nth (array 10 20 30) -0.5) nil) => true)
+
+;; str: 数値表記の境界（整数値に .0 無し、指数表記は展開、0/-0、1e15〜1e21 近傍）
+(example (str 0) => "0")
+(example (str 1.0) => "1")
+(example (str 1e15) => "1000000000000000")
+(example (str 1e16) => "10000000000000000")
+(example (str 1e20) => "100000000000000000000")
+(example (str 1e22) => "10000000000000000000000")
+(example (str -1e21) => "-1000000000000000000000")
+(example (str 9007199254740992) => "9007199254740992")
+(example (str 0.5) => "0.5")
+(example (str 1e-6) => "0.000001")
+
+;; str: 文字列は引用符・エスケープなしで生のまま印字（REPL 印字も同じ print_value 規約）
+(example (str (array "a" "b c")) => "[a b c]")
+(example (str "a\"b") => "a\"b")
+(example (str "a\nb") => "a\nb")
+(example (str (obj (k "v w"))) => "{k: v w}")
+(example (str (obj (r (ok 1)) (s "x"))) => "{r: (ok 1), s: x}")

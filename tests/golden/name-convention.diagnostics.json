@@ -1,0 +1,42 @@
+[
+  {
+    "data": {
+      "path": "(export).names.0"
+    },
+    "fix": {
+      "op": "replace",
+      "path": "(export).names.0",
+      "template": "bad-name"
+    },
+    "kind": "name-convention",
+    "message": "型名前空間のシンボル名 'badName' は kebab-case ではありません（§2.3）。修正候補: 'bad-name'",
+    "severity": "error",
+    "span": {
+      "col": 1,
+      "end": 16,
+      "file": "bad-name.lts",
+      "line": 1,
+      "start": 0
+    }
+  },
+  {
+    "data": {
+      "path": "(defn badName)"
+    },
+    "fix": {
+      "op": "replace",
+      "path": "(defn badName)",
+      "template": "bad-name"
+    },
+    "kind": "name-convention",
+    "message": "値名前空間のシンボル名 'badName' は kebab-case ではありません（§2.3）。修正候補: 'bad-name'",
+    "severity": "error",
+    "span": {
+      "col": 1,
+      "end": 55,
+      "file": "bad-name.lts",
+      "line": 2,
+      "start": 17
+    }
+  }
+]

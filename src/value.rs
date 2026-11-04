@@ -117,6 +117,8 @@ pub enum EqualError {
     Cyclic,
 }
 
+// 循環は JS 表現（参照共有）でのみ発生しうるため、所有ベースの木構造である Rust の Value では
+// この循環検出は発火しない（SPEC §8.3「循環構造における構造的等価」）。
 pub fn structural_equal(a: &Value, b: &Value) -> Result<bool, EqualError> {
     let mut path: Vec<(usize, usize)> = Vec::new();
     eq_visit(a, b, &mut path)

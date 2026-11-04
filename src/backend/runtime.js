@@ -4,7 +4,7 @@ export const err = (value) => ({ tag: "Err", value });
 const CYCLIC_EQ_MESSAGE = "lists runtime-error: cyclic structure in `=` (SPEC 8.3/8.6)";
 
 export function structuralEqual(a, b) {
-  return eqVisit(a, b, []);
+  return eqVisit(a, b, new WeakMap());
 }
 
 function eqVisit(a, b, path) {
@@ -25,13 +25,16 @@ function eqVisit(a, b, path) {
 }
 
 function eqComposite(a, b, path, children) {
-  for (const p of path) {
-    if (p[0] === a && p[1] === b) throw new Error(CYCLIC_EQ_MESSAGE);
+  let partners = path.get(a);
+  if (partners !== undefined && partners.has(b)) throw new Error(CYCLIC_EQ_MESSAGE);
+  if (partners === undefined) {
+    partners = new WeakSet();
+    path.set(a, partners);
   }
-  path.push([a, b]);
+  partners.add(b);
   try {
     return children();
   } finally {
-    path.pop();
+    partners.delete(b);
   }
 }

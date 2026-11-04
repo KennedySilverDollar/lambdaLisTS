@@ -136,6 +136,30 @@ fn cart_lts_typeof_golden() {
 }
 
 #[test]
+fn name_convention_diagnostics_golden() {
+    let mut cache = ModuleCache::default();
+    let r = lists::check::check_source(
+        "(export badName)\n(defn badName (x : number) : number x)\n",
+        "bad-name.lts",
+        &mut cache,
+    );
+    let nc: Vec<&Diagnostic> = r
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagKind::NameConvention)
+        .collect();
+    assert_eq!(nc.len(), 2, "{:?}", r.diagnostics);
+    assert!(nc.iter().all(|d| matches!(
+        &d.fix,
+        Some(Patch::Replace { template, .. }) if template == "bad-name"
+    )));
+    assert_golden(
+        "name-convention.diagnostics.json",
+        serde_json::to_value(&r.diagnostics).expect("ser"),
+    );
+}
+
+#[test]
 fn failure_case_type_mismatch_golden() {
     let mut cache = ModuleCache::default();
     let r = lists::check::check_source("(defn f () : number (ok \"a\"))", "test.lts", &mut cache);
