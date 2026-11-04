@@ -45,6 +45,26 @@ pub fn gen_value(ty: &Type, aliases: &AliasEnv, rng: &mut Rng, depth: usize) -> 
     match normalize_type(ty, aliases) {
         Type::Nil => Some(Value::Nil),
         Type::Bool => Some(Value::Bool(rng.gen_bool())),
+        Type::Dec => {
+            // decimal: 境界 {0, ±1単位, ±1.0, ±DEC_MAX} を半分、他は ±1.0 の範囲
+            if rng.gen_bool() {
+                let b = [
+                    0i128,
+                    1,
+                    -1,
+                    crate::decimal::S,
+                    -crate::decimal::S,
+                    crate::decimal::DEC_MAX,
+                    -crate::decimal::DEC_MAX,
+                ];
+                Some(Value::Dec(b[rng.gen_range(0, 6) as usize]))
+            } else {
+                Some(Value::Dec(
+                    rng.gen_range(0, 2 * crate::decimal::S as u64) as i128
+                        - crate::decimal::S,
+                ))
+            }
+        }
         Type::Number => {
             if rng.gen_bool() {
                 let b = NUM_BOUNDARIES[rng.gen_range(0, (NUM_BOUNDARIES.len() - 1) as u64) as usize];
@@ -99,6 +119,7 @@ pub fn min_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Nil => Some(Value::Nil),
         Type::Bool => Some(Value::Bool(false)),
         Type::Number => Some(Value::Num(0.0)),
+        Type::Dec => Some(Value::Dec(0)),
         Type::Str => Some(Value::Str(Rc::from(""))),
         Type::Literal(lit) => Some(Value::Str(lit)),
         Type::Array(_) => Some(Value::Array(Vec::new())),
@@ -124,6 +145,13 @@ pub fn min_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
 pub fn value_size(v: &Value) -> usize {
     match v {
         Value::Nil | Value::Bool(_) => 0,
+        Value::Dec(s) => {
+            if *s == 0 {
+                0
+            } else {
+                1 + format!("{}", s.unsigned_abs()).len()
+            }
+        }
         Value::Num(n) => {
             if *n == 0.0 {
                 0
@@ -144,6 +172,15 @@ pub fn value_size(v: &Value) -> usize {
 pub fn shrink_candidates(v: &Value, ty: &Type, aliases: &AliasEnv) -> Vec<Value> {
     let mut out = Vec::new();
     match (v, normalize_type(ty, aliases)) {
+        (Value::Dec(s), Type::Dec) => {
+            if *s != 0 {
+                out.push(Value::Dec(0));
+                let half = s / 2;
+                if half != *s {
+                    out.push(Value::Dec(half));
+                }
+            }
+        }
         (Value::Num(n), Type::Number) => {
             if *n != 0.0 {
                 out.push(Value::Num(0.0));
@@ -360,6 +397,7 @@ pub fn value_to_lit(v: &Value) -> String {
         ),
         Value::Ok(x) => format!("(ok {})", value_to_lit(x)),
         Value::Err(x) => format!("(err {})", value_to_lit(x)),
+        Value::Dec(s) => crate::decimal::fmt_dec(*s),
         Value::Closure(_) | Value::Builtin(_) => "<fn>".to_string(),
     }
 }

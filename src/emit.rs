@@ -9,6 +9,7 @@ use crate::ir::Core;
 use crate::sourcemap_out::MapBuilder;
 use crate::span::Span;
 use crate::stdlib::stdlib;
+use crate::types::Type;
 use crate::value::Value;
 
 const JS_RESERVED: &[&str] = &[
@@ -26,6 +27,10 @@ const SLICE_BOUNDS_JS: &str = "function $slice_bounds(len, start, end) {\n  cons
 
 // SPEC §11.6/付録C #10: str の印字規約（print_value 互換）。f64 は指数表記を展開する。
 const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (Array.isArray(v)) return \"[\" + v.map($print).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $print_num(n) {\n  if (Number.isNaN(n)) return \"NaN\";\n  if (n === Infinity) return \"Infinity\";\n  if (n === -Infinity) return \"-Infinity\";\n  if (Object.is(n, -0)) return \"-0\";\n  const s = String(n);\n  if (s.indexOf(\"e\") < 0 && s.indexOf(\"E\") < 0) return s;\n  const m = /^(-?)(\\d+)(?:\\.(\\d+))?[eE]([+-]?\\d+)$/.exec(s);\n  if (!m) return s;\n  const sign = m[1];\n  const digits = m[2] + (m[3] || \"\");\n  const point = m[2].length + parseInt(m[4], 10);\n  if (point <= 0) return sign + \"0.\" + \"0\".repeat(-point) + digits;\n  if (point >= digits.length) return sign + digits + \"0\".repeat(point - digits.length);\n  return sign + digits.slice(0, point) + \".\" + digits.slice(point);\n}\nfunction $cmp_str(a, b) {\n  const pa = [...a];\n  const pb = [...b];\n  const n = Math.min(pa.length, pb.length);\n  for (let i = 0; i < n; i++) {\n    const d = pa[i].codePointAt(0) - pb[i].codePointAt(0);\n    if (d !== 0) return d;\n  }\n  return pa.length - pb.length;\n}\n";
+
+// decimal（M23）用のローカルヘルパ。BigInt のスケール済み整数で interp(i128) とビット一致する。
+// エラーメッセージは interp 側（src/decimal.rs の ERR_*）と同一文字列。
+const DEC_JS: &str = "const $DEC_S = 10n ** 18n;\nconst $DEC_MAX = 170141183460469231731687303715884105727n;\nfunction $dec_check(r) { if (r > $DEC_MAX || r < -$DEC_MAX) throw new Error(\"decimal-overflow\"); return r; }\nconst $dec_add = (a, b) => $dec_check(a + b);\nconst $dec_sub = (a, b) => $dec_check(a - b);\nconst $dec_mul = (a, b) => { const p = a * b; const neg = p < 0n; const ap = neg ? -p : p; let q = ap / $DEC_S; const r = ap % $DEC_S; if (2n * r >= $DEC_S) q += 1n; return $dec_check(neg ? -q : q); };\nconst $dec_div = (a, b) => { if (b === 0n) throw new Error(\"decimal-division-by-zero\"); const neg = (a < 0n) !== (b < 0n); const num = (a < 0n ? -a : a) * $DEC_S; const den = b < 0n ? -b : b; let q = num / den; const r = num % den; if (2n * r >= den) q += 1n; return $dec_check(neg ? -q : q); };\nfunction $print_dec(v) { const neg = v < 0n; const a = neg ? -v : v; const i = a / $DEC_S; const f = a % $DEC_S; return (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\"); }\nconst $to_dec = (a) => { if (typeof a !== \"number\" || Number.isNaN(a) || !Number.isFinite(a)) throw new Error(\"decimal-overflow\"); const m = /^([+-]?)(\\d+)(?:\\.(\\d+))?e([+-]?\\d+)$/.exec(a.toExponential()); if (!m) throw new Error(\"decimal-overflow\"); const sign = m[1] === \"-\" ? -1n : 1n; const digits = m[2] + (m[3] || \"\"); const exp = parseInt(m[4], 10) - (m[3] || \"\").length + 18; const mant = BigInt(digits); let r; if (exp >= 0) { r = mant * 10n ** BigInt(exp); } else { const den = 10n ** BigInt(-exp); let q = mant / den; const rem = mant % den; if (2n * rem >= den) q += 1n; r = q; } return $dec_check(sign * r); };\nfunction $json(v) { if (typeof v === \"bigint\") return JSON.stringify({ tag: \"Dec\", value: $print_dec(v) }); if (Array.isArray(v)) return \"[\" + v.map($json).join(\",\") + \"]\"; if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $json(v[k])).join(\",\") + \"}\"; } return JSON.stringify(v); }\n";
 
 pub fn js_name(name: &str) -> String {
     let mut n = name.replace('-', "_");
@@ -78,6 +83,7 @@ pub fn lit_js(value: &Value) -> String {
             }
         }
         Value::Bool(b) => format!("{b}"),
+        Value::Dec(s) => format!("{s}n"),
         _ => "null".to_string(),
     }
 }
@@ -168,6 +174,58 @@ fn defs_use_async(defs: &[CoreDef], impure: &BTreeSet<String>) -> bool {
         }
     }
     false
+}
+
+fn core_uses_decimal(e: &Core) -> bool {
+    match e {
+        Core::Lit { value: Value::Dec(_), .. } => true,
+        Core::Var { name, .. } => matches!(name.as_ref(), "to-dec" | "to-num"),
+        Core::App { f, args, .. } => {
+            core_uses_decimal(f)
+                || args.iter().any(core_uses_decimal)
+        }
+        Core::Lam { body, .. } => core_uses_decimal(body),
+        Core::Let { rhs, body, .. } => core_uses_decimal(rhs) || core_uses_decimal(body),
+        Core::If { cond, then, else_, .. } => {
+            core_uses_decimal(cond) || core_uses_decimal(then) || core_uses_decimal(else_)
+        }
+        Core::Match { scrutinee, arms, .. } => {
+            core_uses_decimal(scrutinee) || arms.iter().any(|a| core_uses_decimal(&a.body))
+        }
+        Core::Obj { fields, .. } => fields.iter().any(|(_, c)| core_uses_decimal(c)),
+        Core::Field { obj, .. } => core_uses_decimal(obj),
+        Core::EffectCall { args, .. } => args.iter().any(core_uses_decimal),
+        Core::Do { binds, body, .. } => {
+            binds.iter().any(|b| core_uses_decimal(&b.expr)) || core_uses_decimal(body)
+        }
+        _ => false,
+    }
+}
+
+fn type_is_dec(t: &Type) -> bool {
+    matches!(t, Type::Dec)
+}
+
+fn defs_use_decimal(defs: &[CoreDef]) -> bool {
+    defs.iter().any(|d| match d {
+        CoreDef::Defn {
+            body,
+            params,
+            ret,
+            ..
+        } => {
+            core_uses_decimal(body)
+                || params.iter().any(|p| type_is_dec(&p.ty))
+                || type_is_dec(ret)
+        }
+        CoreDef::Example {
+            actual, expected, ..
+        } => core_uses_decimal(actual) || core_uses_decimal(expected),
+        CoreDef::Prop { body, params, .. } => {
+            core_uses_decimal(body) || params.iter().any(|p| type_is_dec(&p.ty))
+        }
+        _ => false,
+    })
 }
 
 pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
@@ -487,6 +545,7 @@ struct Gen<'a> {
     host_stack: Vec<String>,
     in_async: bool,
     uses_async: bool,
+    decimal_used: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -534,6 +593,7 @@ impl<'a> Gen<'a> {
             host_stack: Vec::new(),
             in_async: false,
             uses_async,
+            decimal_used: defs_use_decimal(&input.defs),
         }
     }
 
@@ -589,6 +649,9 @@ impl<'a> Gen<'a> {
         for name in &self.stdlib_used {
             out += &format!("const {} = {};\n", stdlib_js_name(name), self.stdlib_impl(name));
         }
+        if self.decimal_used {
+            out += DEC_JS;
+        }
         if !out.is_empty() {
             out.push('\n');
         }
@@ -598,10 +661,34 @@ impl<'a> Gen<'a> {
     fn stdlib_impl(&self, name: &str) -> String {
         let se = self.runtime_ref("structuralEqual");
         match name {
-            "+" => "(a, b) => a + b".to_string(),
-            "-" => "(a, b) => a - b".to_string(),
-            "*" => "(a, b) => a * b".to_string(),
-            "/" => "(a, b) => a / b".to_string(),
+            "+" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_add(a, b) : a + b".to_string()
+                } else {
+                    "(a, b) => a + b".to_string()
+                }
+            }
+            "-" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_sub(a, b) : a - b".to_string()
+                } else {
+                    "(a, b) => a - b".to_string()
+                }
+            }
+            "*" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_mul(a, b) : a * b".to_string()
+                } else {
+                    "(a, b) => a * b".to_string()
+                }
+            }
+            "/" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_div(a, b) : a / b".to_string()
+                } else {
+                    "(a, b) => a / b".to_string()
+                }
+            }
             "<" => "(a, b) => a < b".to_string(),
             ">" => "(a, b) => a > b".to_string(),
             "<=" => "(a, b) => a <= b".to_string(),
@@ -612,7 +699,15 @@ impl<'a> Gen<'a> {
             "min" => "(a, b) => { if (Number.isNaN(a)) return b; if (Number.isNaN(b)) return a; return a < b ? a : b; }".to_string(),
             "max" => "(a, b) => { if (Number.isNaN(a)) return b; if (Number.isNaN(b)) return a; return a > b ? a : b; }".to_string(),
             "not" => "(a) => !a".to_string(),
-            "str" => "(a) => $print(a)".to_string(),
+            "str" => {
+                if self.decimal_used {
+                    "(a) => typeof a === \"bigint\" ? $print_dec(a) : $print(a)".to_string()
+                } else {
+                    "(a) => $print(a)".to_string()
+                }
+            }
+            "to-dec" => "(a) => $to_dec(a)".to_string(),
+            "to-num" => "(a) => Number(a) / 1e18".to_string(),
             "str-concat" => "(...a) => a.join(\"\")".to_string(),
             "str-slice" => "(s, i, j) => { const c = [...s]; const [a, b] = $slice_bounds(c.length, i, j); return c.slice(a, b).join(\"\"); }".to_string(),
             "len" => "(s) => [...s].length".to_string(),
@@ -764,11 +859,12 @@ impl<'a> Gen<'a> {
                 self.expr(expected, "  ", w);
                 w.write(";\n");
                 self.in_async = saved_async;
+                let ser = if self.decimal_used { "$json(actual)" } else { "JSON.stringify(actual)" };
                 w.line(&format!(
-                    "  if (!{se}(actual, expected)) throw new Error(\"example {i} failed: \" + JSON.stringify(actual));"
+                    "  if (!{se}(actual, expected)) throw new Error(\"example {i} failed: \" + {ser});"
                 ));
                 w.line(&format!(
-                    "  console.log(\"example {i}: ok \" + JSON.stringify(actual));"
+                    "  console.log(\"example {i}: ok \" + {ser});"
                 ));
                 w.line("}");
             }
@@ -1282,5 +1378,24 @@ mod tests {
         assert!(!out.js.contains("{ok}(arr[k])"), "{}", out.js);
         assert!(out.js.contains("if (f(x)) return x; return null;"), "{}", out.js);
         assert!(out.js.contains("t === \"\" ? [...s] : s.split(t)"), "{}", out.js);
+    }
+
+    #[test]
+    fn decimal_literals_lower_to_bigint_and_helpers_are_emitted() {
+        let out = emit_src(
+            "(defn f (a : decimal) (b : decimal) : decimal (* a b))\n(example (f 1.50d 2.00d) => 3.00d)",
+        )
+        .expect("emit");
+        assert!(out.js.contains("1500000000000000000n"), "{}", out.js);
+        assert!(out.js.contains("$dec_mul"), "{}", out.js);
+        assert!(out.js.contains("$json(actual)"), "{}", out.js);
+    }
+
+    #[test]
+    fn pure_number_module_has_no_decimal_helpers() {
+        let out = emit_src("(defn add (a : number) (b : number) : number (+ a b))\n(example (add 1 2) => 3)").expect("emit");
+        assert!(!out.js.contains("$dec_mul"), "{}", out.js);
+        assert!(!out.js.contains("bigint"), "{}", out.js);
+        assert!(out.js.contains("const $stdlib_add = (a, b) => a + b;"), "{}", out.js);
     }
 }

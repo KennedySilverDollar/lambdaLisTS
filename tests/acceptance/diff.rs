@@ -71,3 +71,10 @@ fn do_io_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["do-io.lts"], "do-io.lts");
 }
+
+// M23 decimal: 固定小数点 SCALE=18。丸め（half-away）を含め interp と JS で同一結果になること。
+#[test]
+fn decimal_edge_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["decimal-edge.lts"], "decimal-edge.lts");
+}

@@ -1,0 +1,35 @@
+;; M23 decimal（固定小数点 SCALE=18、design/decimal.md 採用済み）。
+;; interp と JS で同一の結果（丸め含む）になることを差分テストで検証する。
+(type Price (obj (amount : decimal) (currency : string)))
+
+(defn add-price (a : Price) (b : Price) : Price
+  (obj (amount (+ a.amount b.amount)) (currency a.currency)))
+
+;; リテラル・四則・丸め（half-away-from-zero）
+(example 1.50d => 1.50d)
+(example (+ 1.50d 2.25d) => 3.75d)
+(example (- 1.00d 2.50d) => -1.50d)
+(example (* 1.50d 2.00d) => 3.00d)
+(example (* 0.10d 0.10d) => 0.01d)
+(example (/ 1.00d 3.00d) => 0.333333333333333333d)
+(example (/ 2.00d 3.00d) => 0.666666666666666667d)
+(example (/ -1.00d 2.00d) => -0.50d)
+
+;; 比較・構造的等価
+(example (< 1.00d 2.00d) => true)
+(example (<= 2.00d 2.00d) => true)
+(example (> 2.00d 1.00d) => true)
+(example (= 1.50d 1.50d) => true)
+(example (= 1.50d 1.51d) => false)
+
+;; number との明示変換（暗黙変換なし）
+(example (to-dec 1.5) => 1.50d)
+(example (to-num 2.50d) => 2.5)
+
+;; 印字（小数点以下ちょうど SCALE 桁の平書き）
+(example (str 1.50d) => "1.500000000000000000")
+(example (str -0.25d) => "-0.250000000000000000")
+
+;; obj フィールドにも使える
+(example (add-price (obj (amount 1.10d) (currency "JPY")) (obj (amount 2.20d) (currency "JPY")))
+  => (obj (amount 3.30d) (currency "JPY")))

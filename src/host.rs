@@ -65,6 +65,7 @@ pub fn default_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
     match normalize_type(ty, aliases) {
         Type::Nil => Some(Value::Nil),
         Type::Number => Some(Value::Num(0.0)),
+        Type::Dec => Some(Value::Dec(0)),
         Type::Str => Some(Value::Str(Rc::from(""))),
         Type::Bool => Some(Value::Bool(false)),
         Type::Literal(_) => None,

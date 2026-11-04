@@ -81,6 +81,17 @@ impl Interp {
                 _ => Err(EvalError::Runtime("Array が必要です".to_string())),
             }
         };
+        let num_pair = |args: &[Value]| -> Result<(f64, f64), EvalError> {
+            match (&args[0], &args[1]) {
+                (Value::Num(a), Value::Num(b)) => Ok((*a, *b)),
+                (Value::Dec(_), Value::Dec(_)) => Err(EvalError::Runtime(
+                    "decimal には number 用の演算を適用できません（to-num で変換してください）".to_string(),
+                )),
+                _ => Err(EvalError::Runtime(
+                    "演算の引数は number または decimal の同一型である必要があります".to_string(),
+                )),
+            }
+        };
         let bool_v = |v: &Value| -> Result<bool, EvalError> {
             match v {
                 Value::Bool(b) => Ok(*b),
@@ -90,14 +101,80 @@ impl Interp {
         let ok_v = |v: Value| Value::Ok(Box::new(v));
         let err_v = |v: Value| Value::Err(Box::new(v));
         match &b.kind {
-            BuiltinKind::Add => Ok(Value::Num(num(&args[0])? + num(&args[1])?)),
-            BuiltinKind::Sub => Ok(Value::Num(num(&args[0])? - num(&args[1])?)),
-            BuiltinKind::Mul => Ok(Value::Num(num(&args[0])? * num(&args[1])?)),
-            BuiltinKind::Div => Ok(Value::Num(num(&args[0])? / num(&args[1])?)),
-            BuiltinKind::Lt => Ok(Value::Bool(num(&args[0])? < num(&args[1])?)),
-            BuiltinKind::Gt => Ok(Value::Bool(num(&args[0])? > num(&args[1])?)),
-            BuiltinKind::Le => Ok(Value::Bool(num(&args[0])? <= num(&args[1])?)),
-            BuiltinKind::Ge => Ok(Value::Bool(num(&args[0])? >= num(&args[1])?)),
+            BuiltinKind::Add => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_add(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a + b))
+            }
+            BuiltinKind::Sub => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_sub(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a - b))
+            }
+            BuiltinKind::Mul => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_mul(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a * b))
+            }
+            BuiltinKind::Div => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_div(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a / b))
+            }
+            BuiltinKind::Lt => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a < b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a < b))
+            }
+            BuiltinKind::Gt => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a > b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a > b))
+            }
+            BuiltinKind::Le => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a <= b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a <= b))
+            }
+            BuiltinKind::Ge => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a >= b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a >= b))
+            }
+            BuiltinKind::ToDec => match &args[0] {
+                Value::Num(n) => Ok(Value::Dec(
+                    crate::decimal::dec_from_num(*n).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                )),
+                _ => Err(EvalError::Runtime("to-dec は number が必要です".to_string())),
+            },
+            BuiltinKind::ToNum => match &args[0] {
+                Value::Dec(s) => Ok(Value::Num(crate::decimal::dec_to_num(*s))),
+                _ => Err(EvalError::Runtime("to-num は decimal が必要です".to_string())),
+            },
             BuiltinKind::Eq => Ok(Value::Bool(
                 structural_equal(&args[0], &args[1]).map_err(|e| EvalError::Runtime(e.to_string()))?,
             )),
@@ -571,6 +648,8 @@ pub fn stdlib_env() -> Rc<Env> {
     def("bind", BuiltinKind::Bind);
     def("map-result", BuiltinKind::MapResult);
     def("traverse", BuiltinKind::Traverse);
+    def("to-dec", BuiltinKind::ToDec);
+    def("to-num", BuiltinKind::ToNum);
     env
 }
 
@@ -948,5 +1027,32 @@ mod tests {
         assert_eq!(r, Value::Array(vec![]));
         let r = builtin_call("split", vec![Value::Str(Rc::from("a,b,c")), Value::Str(Rc::from(","))]).expect("ok");
         assert_eq!(r, Value::Array(vec![Value::Str(Rc::from("a")), Value::Str(Rc::from("b")), Value::Str(Rc::from("c"))]));
+    }
+
+    #[test]
+    fn decimal_arithmetic_rounding_and_errors() {
+        let r = call_src("(defn f () : decimal (+ 1.50d 2.25d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Dec(3_750_000_000_000_000_000));
+        let r = call_src("(defn f () : decimal (/ 2.00d 3.00d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Dec(666_666_666_666_666_667), "half-away で切り上がる");
+        let r = call_src("(defn f () : bool (= 1.50d 1.50d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Bool(true));
+        let r = call_src("(defn f () : number (to-num 2.50d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Num(2.5));
+        let r = call_src("(defn f () : decimal (to-dec 0.1))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Dec(100_000_000_000_000_000));
+        // 0 除算・オーバーフローはバックエンド中立の実行時エラー
+        let e = call_src("(defn f () : decimal (/ 1.00d 0.00d))", "f", vec![]).expect_err("err");
+        assert!(e.to_string().contains("decimal-division-by-zero"), "{e}");
+        let e = call_src(
+            "(defn f () : decimal (* 100000000000d 100000000000d))",
+            "f",
+            vec![],
+        )
+        .expect_err("err");
+        assert!(e.to_string().contains("decimal-overflow"), "{e}");
+        // 混在は実行時エラー（検査で弾かれるはずだが eval でも事故らない）
+        let e = call_src("(defn f () : number (+ 1 1.5d))", "f", vec![]);
+        assert!(e.is_err());
     }
 }

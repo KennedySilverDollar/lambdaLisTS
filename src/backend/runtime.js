@@ -9,6 +9,7 @@ export function structuralEqual(a, b) {
 
 function eqVisit(a, b, path) {
   if (typeof a === "number" && typeof b === "number") return a === b;
+  if (typeof a === "bigint" || typeof b === "bigint") return a === b;
   if (a === null || b === null) return a === b;
   if (typeof a !== typeof b) return false;
   if (Array.isArray(a) || Array.isArray(b)) {

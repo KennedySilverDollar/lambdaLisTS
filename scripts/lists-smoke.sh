@@ -160,5 +160,14 @@ printf '%s\n' \
 [ "$code" -eq 0 ] && grep -q '"ok":false' "$TMP/s23.txt" && grep -q '"counterexample"' "$TMP/s23.txt" && grep -qE '"shrunk":\{"x":0(\.0)?\}' "$TMP/s23.txt" && grep -q '"seed":7' "$TMP/s23.txt"
 check 23 "repl prop: 偽 prop に反例・縮小(x=0)・シードが機械可読で返る" $? "code=$code out=$(head -c 240 "$TMP/s23.txt")"
 
+# S24: decimal — compile+node で全 example が通り、印字は SCALE 桁固定の平書き（M23）
+out=$($BIN compile $F/decimal-edge.lts --out "$TMP/o24"); code=$?
+n_ok=0
+if [ "$code" -eq 0 ]; then
+  node "$TMP/o24/decimal-edge.js" > "$TMP/n24.txt" 2>&1 && n_ok=$(grep -c ': ok' "$TMP/n24.txt" || true)
+fi
+[ "$code" -eq 0 ] && [ "$n_ok" -eq 18 ] && grep -q '"tag":"Dec","value":"3.750000000000000000"' "$TMP/n24.txt"
+check 24 "decimal-edge.lts: 18/18 ok in node（BigInt lowering・SCALE桁印字）" $? "code=$code ok=$n_ok out=$(head -c 200 "$TMP/n24.txt")"
+
 echo "SMOKE: $pass/$((pass+fail))"
 [ "$fail" -eq 0 ]

@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod backends;
 pub mod check;
+pub mod decimal;
 pub mod desugar;
 pub mod diagnostic;
 pub mod effects;

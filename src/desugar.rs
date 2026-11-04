@@ -85,6 +85,7 @@ impl CoreDef {
 fn lit_value(v: &LitValue) -> Value {
     match v {
         LitValue::Num(n) => Value::Num(*n),
+        LitValue::Dec(text) => Value::Dec(crate::decimal::parse_dec_scientific(text).unwrap_or(0)),
         LitValue::Str(s) => Value::Str(s.clone()),
         LitValue::Bool(b) => Value::Bool(*b),
         LitValue::Nil => Value::Nil,
@@ -263,6 +264,7 @@ impl Desugarer {
         match t {
             TypeExpr::Prim { name, .. } => match name {
                 Prim::Number => Type::Number,
+                Prim::Dec => Type::Dec,
                 Prim::Str => Type::Str,
                 Prim::Bool => Type::Bool,
                 Prim::Nil => Type::Nil,

@@ -282,3 +282,31 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 - 未決: SCALE の値、接尾辞の文字、演算子多重定義 vs 専用演算子、オーバーフロー時エラー vs 飽和 —詳細は design/decimal.md §8
 
 コード無変更のため `cargo test` 229/229、スモーク 23/23 は維持（確認済み）。
+
+---
+
+## 16. M23: decimal 実装（design/decimal.md の採用済み設計どおり）
+
+ユーザーが design/decimal.md の推奨案を採用したため実装した。SPEC には採用済み設計を直接反映（§2 atom、§3.3 type、§8.6 decimal 段落＋中立エラー名、§11.1 演算子/to-dec/to-num、§11.6 印字、§12.4 lowering、§0.3 row 6、§14 注記）。
+
+### 実装
+- **表現**: 固定小数点 SCALE=18。実行時の値はスケール済み整数（interp: i128、JS: BigInt、WASM 将来: i128）で全バックエンドビット一致。`src/decimal.rs` に SCALE/S/DEC_MAX、パース（`parse_dec_scientific`）、印字（`fmt_dec`、SCALE 桁固定）、演算（`dec_add/sub` は checked、`dec_mul` は 256bit ワイド積＋half-away 除算、`dec_div` は 256bit 長除算＋half-away、範囲超過は `decimal-overflow`、0 除算は `decimal-division-by-zero`）、`dec_from_num`/`dec_to_num` を実装。
+- **字句/構文**: `1.50d`（number 直後の `d` 接尾辞。`1.5` は number のまま後方互換）→ `TokenKind::Dec` → `LitValue::Dec` → `Value::Dec(i128)`。型名 `decimal`（Prim::Dec / Type::Dec）。
+- **型検査**: `lit_type`/パターンリテラルに Dec。`+ - * / < <= > >=` は両引数 Dec なら Dec/Bool、両 number なら従来どおり、混在は type-mismatch（`check.rs` の App で特殊処理）。`=` は構造的等価（Dec は整数等価）。
+- **interp**: 算術 builtin が (Num,Num)/(Dec,Dec) を振り分け、混在は runtime error。`to-dec`/`to-num` builtin 追加。
+- **JS 生成**: decimal 使用モジュールのみ `DEC_JS` ヘルパ（`$dec_add/sub/mul/div`・`$print_dec`・`$to_dec`・`$json`）を出力し、`+ - * /` と `str` の stdlib を dual-mode 化（`typeof a === "bigint"` で振り分け）。純粋 number モジュールの出力は無変更（money.js 等のゴールデン不変）。リテラルは `1500000000000000000n`。example の直列化は `$json`（BigInt は JSON.stringify できないため `{tag:"Dec",value:"..."}` 形式）。runtime.js の structuralEqual に bigint 分岐（export は3つのまま）。
+- **prop**: forall の decimal パラメータも生成可（境界 {0,±1,±1.0,±DEC_MAX} + 範囲内ランダム、縮小は 0 へ）。
+
+### テスト
+- decimal.rs 単体（パース/印字往復、丸め、オーバーフロー、変換の決定性）、lexer（`d` 接尾辞）、eval（四則・丸め・エラー・変換・混在エラー）、emit（BigInt lowering と純 number モジュールの無変更）
+- `tests/fixtures/decimal-edge.lts`（18 example: 四則・half-away 丸め・比較・`=`・to-dec/to-num・印字・obj フィールド）→ `diff::decimal_edge_diff_interp_vs_backend`（interp vs js/mock で一致）
+- golden 追記: `tests/golden/decimal-edge.js` / `.map`
+- エラー名のバックエンド一致: `backend.rs::decimal_edge_js_golden_and_error_parity_with_interp`（0除算・オーバーフローで interp と node が同一文字列を出すことを検証）
+- スモーク S24（decimal-edge.lts を compile+node で 18/18 ok、SCALE桁印字を確認）。S1–S23 不変、合計は動的表示
+
+### 検証
+- `cargo test` 238全パス、`LISTS_BACKEND=mock` acceptance 14/14、スモーク **24/24**、warning 0。既存ゴールデン（money.js/cart.js 等）無変更。
+
+### 残課題
+- 10進浮動小数点（動的レンジ）が必要になった場合は別型として追加検討（P5 付近）。現状の固定小数点の範囲は実値 ±1.7e20。
+- JS バックエンドでの prop 実行は依然として未実装（REPL/interp のみ）。

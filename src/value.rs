@@ -8,6 +8,7 @@ use crate::ir::{Core, Param};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Num(f64),
+    Dec(i128),
     Str(Rc<str>),
     Bool(bool),
     Nil,
@@ -66,6 +67,8 @@ pub enum BuiltinKind {
     Bind,
     MapResult,
     Traverse,
+    ToDec,
+    ToNum,
     /// モック host のハンドラ（host.rs）。呼び出しを log に記録し、default を返す。
     /// log は実行時の記録なのでシリアライズしない。
     HostMock {
@@ -190,6 +193,7 @@ fn eq_visit(a: &Value, b: &Value, path: &mut Vec<(usize, usize)>) -> Result<bool
         }
         (Value::Ok(x), Value::Ok(y)) => eq_boxed(x, y, a, b, path),
         (Value::Err(x), Value::Err(y)) => eq_boxed(x, y, a, b, path),
+        (Value::Dec(x), Value::Dec(y)) => Ok(x == y),
         (Value::Closure(x), Value::Closure(y)) => Ok(Rc::ptr_eq(x, y)),
         (Value::Builtin(x), Value::Builtin(y)) => Ok(Rc::ptr_eq(x, y)),
         _ => Ok(false),
@@ -231,6 +235,7 @@ pub fn print_value(v: &Value) -> String {
             }
         }
         Value::Bool(b) => format!("{b}"),
+        Value::Dec(s) => crate::decimal::fmt_dec(*s),
         Value::Array(xs) => format!(
             "[{}]",
             xs.iter().map(print_value).collect::<Vec<_>>().join(" ")

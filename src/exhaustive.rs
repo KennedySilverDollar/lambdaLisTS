@@ -18,6 +18,7 @@ enum Case {
 fn lit_type_of(value: &Value) -> Type {
     match value {
         Value::Nil => Type::Nil,
+        Value::Dec(_) => Type::Dec,
         Value::Str(s) => Type::Literal(s.clone()),
         Value::Num(_) => Type::Number,
         _ => Type::Bool,

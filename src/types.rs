@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Type {
     Number,
+    Dec,
     Str,
     Bool,
     Nil,
@@ -33,6 +34,7 @@ pub fn structural_equal(a: &Type, b: &Type) -> bool {
     }
     match (a, b) {
         (Type::Number, Type::Number)
+        | (Type::Dec, Type::Dec)
         | (Type::Str, Type::Str)
         | (Type::Bool, Type::Bool)
         | (Type::Nil, Type::Nil) => true,
@@ -171,6 +173,7 @@ pub fn print_type_plain(t: &Type) -> String {
 fn print_type_seen(t: &Type, aliases: &AliasEnv, seen: &mut BTreeSet<Rc<str>>) -> String {
     match t {
         Type::Number => "number".to_string(),
+        Type::Dec => "decimal".to_string(),
         Type::Str => "string".to_string(),
         Type::Bool => "bool".to_string(),
         Type::Nil => "nil".to_string(),

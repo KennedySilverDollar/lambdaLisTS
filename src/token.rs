@@ -25,6 +25,7 @@ pub enum TokenKind {
     CloseBrace,
     Punct,
     Number,
+    Dec,
     Str,
     Keyword,
     Symbol,
@@ -73,6 +74,8 @@ impl Punct {
 pub enum TokenValue {
     Punct(Punct),
     Num(f64),
+    /// decimal リテラル（接尾辞 d は除いた数字テキスト）
+    Dec(Rc<str>),
     Str(String),
     Bool(bool),
     Keyword(Rc<str>),

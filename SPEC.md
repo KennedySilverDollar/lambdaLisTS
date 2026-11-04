@@ -58,6 +58,7 @@ Scope: Pure core + Result + minimal effects checking
 | 3 | §8.6 の実行時エラー定義をバックエンド中立化（対応は表で規定） | §8.6。T8 の source map 検証は JS バックエンドにおける具体例として維持 |
 | 4 | `(union T nil)`（`Option T`）の実行時表現は生値 T（Ok/Err で包まない）。`find`/`nth` の成功は T、失敗は `nil` | §11.6 |
 | 5 | `split` の空区切りは Unicode スカラ値（char）を1要素とし、空文字列要素を生じない | §11.6 |
+| 6 | decimal 型（固定小数点 SCALE=18・`d` 接尾辞リテラル・同型のみ演算子多重定義・to-dec/to-num・half-away丸め・SCALE桁印字・バックエンド中立エラー） | §8.6, §11.1, §11.6, §12.4 |
 
 併せて、stdlib 5件と印字規約の規範所在（§11.6・付録C #10/#11 を規範とし JS 側を修正）も本追補に含める。§11.6 では各項目を明確化した:min/max の NaN・±0・±Infinity（同値なら第2引数を返す）規則、len/str-slice のコードポイント単位（サロゲートペアは 1）、slice/str-slice と nth の小数の 0 方向切り捨て、`str` の数値表記（整数値に `.0` 無し・指数表記は展開）と文字列の無引用・無エスケープ印字、および REPL 印字への適用。
 
@@ -93,7 +94,8 @@ bracket    ::= '[' | ']'
 brace      ::= '{' | '}'                       ; 予約（P0では未使用）
 punct      ::= '<=' | '>=' | '=>' | '->'
             | ':' | '+' | '-' | '*' | '/' | '<' | '>' | '='
-atom       ::= number | string | keyword | symbol | dotted-symbol | nil | bool
+atom       ::= number | decimal | string | keyword | symbol | dotted-symbol | nil | bool
+decimal    ::= number 'd'                          ; 例: 1.50d（既存の 1.5 は number のまま）
 ```
 
 字象の規則：
@@ -163,7 +165,7 @@ top-form  ::= import | export | type-def | effect-def | defn | defn! | prop | ex
 ### 3.3 型構文
 
 ```bnf
-type   ::= 'number' | 'string' | 'bool' | 'nil'
+type   ::= 'number' | 'string' | 'bool' | 'nil' | 'decimal'
          | symbol                                    ; 型エイリアス
          | '(' 'Array' type ')'
          | '(' 'union' type+ ')'
@@ -558,6 +560,7 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 ### 8.6 数値と実行時エラー
 
 - **number は IEEE754 倍精度浮動小数点数（f64。JS準拠）であり、この単一の数値表現で確定する（v0.2追補 §0.3、MUST）**。Rust 側 `f64` は IEEE754 binary64 であり、JS と**同一の演算結果**を与える。リテラルは正しく丸められた 10進→binary64 変換で値が決まる（オーバーフローは ±Infinity）。すべての算術・比較は IEEE754 の例外なき演算に従い（`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN）、NaN・±Infinity も number 値である。2^53 を超える整数値の丸めは仕様上の値であり、`=` では NaN は NaN と等しくない（§8.3）。decimal は P1。整数型（i64/i53）への変更は §14 に従い P5（ネイティブAOT）で性能要件が発生した場合に再検討する。
+- **decimal は固定小数点（SCALE=18 固定）**（P1/M23、design/decimal.md、MUST）: 実行時の値はスケール済み整数 s（実値 = s / 10^18）であり、Rust では i128、JS では BigInt、WASM では i128 で表され、**全バックエンドでビット一致**する。表現可能な範囲は |s| ≤ i128::MAX（実値で約 ±1.7e20）。リテラルは `1.50d`（number の直後に接尾辞 `d`）。`+ - * / < <= > >=` は「両引数が decimal」のとき decimal/bool を返し（両 number なら従来どおり）、混在は type-mismatch（暗黙変換はしない。明示変換は `to-dec` / `to-num` のみ）。`=` はスケール済み整数の等価。丸めは round-half-away-from-zero（trunc 除算 + 剰余の 2r ≥ d 判定）で全バックエンド一致。`/` の 0 除算は実行時エラー `decimal-division-by-zero`、範囲超過は `decimal-overflow`（number の `(/ 1 0)=Infinity` とは異なる）。
 - **P0（純粋関数のみ）における「実行時エラー」とは、プログラムの実行が継続できない意味論上の事態であり、各バックエンドの実行環境が報告する回復不可能な失敗として観測される（MUST）。バックエンドごとの対応は次表で規定する。例外の型名・メッセージ・スタック表現はバックエンド固有であり規範外とする。**
 
 | バックエンド | 実行時エラーとして観測されるもの |
@@ -567,6 +570,7 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 
 .lts 行への対応付けは source map が担う。**T8 の source map 検証は、JS バックエンドにおける実行時エラーの具体例である。**
 - **循環構造を含む値に対する `=` は、循環を検出した時点で実行時エラーとする（§8.3、MUST）**。
+- decimal の実行時エラーはバックエンド中立に同一の名前で報告される（MUST）: `decimal-division-by-zero`（decimal の 0 除算）、`decimal-overflow`（表現範囲超過）。
 
 ---
 
@@ -745,7 +749,9 @@ lists repl                                 # JSON Lines REPL
 
 | 名前 | 型 |
 |---|---|
-| `+` `-` `*` `/` | `(fn (number number) : number)`（2引数固定。可変長はP1で検討） |
+| `+` `-` `*` `/` | `(fn (number number) : number)`。P1 以降は両引数が decimal なら decimal（混在は type-mismatch） |
+| `<` `>` `<=` `>=` | `(fn (number number) : bool)`。両引数が decimal なら bool |
+| `to-dec` / `to-num` | `(fn (number) : decimal)` / `(fn (decimal) : number)`。number と decimal の**唯一の**明示変換（暗黙変換なし） |
 | `<` `>` `<=` `>=` | `(fn (number number) : bool)` |
 | `=` | `(fn (T T) : bool)` 構造的等価 |
 | `mod` `min` `max` | `(fn (number number) : number)`、`abs` は `(fn (number) : number)` |
@@ -813,6 +819,7 @@ P0 の標準ライブラリはすべて純粋関数であり、**その意味論
   - 配列 → `[a b c]`（空白区切り）、オブジェクト → `{k: v, ...}`（キーは UTF-8 バイト順（コードポイント順）にソート）、Result → `(ok v)` / `(err v)`、関数 → `<fn>`
   - （JS バックエンドの注意:Result は `{tag, value}` 形状に lowering されるため、`tag` と `value` の2キーのみを持つ obj と印字上区別できない。P0 の型検査では両者を `=` で比較することはできない）
 - 印字の適用範囲: `str` による変換に加え、REPL の結果印字（`actual` / `expected`）も同じ `print_value` 規約に従う（MUST）。診断は値を直接印字せず span と kind で示し、値を示す場合もこの規約に従う。
+- `decimal` → 小数点以下ちょうど SCALE(18) 桁の平書き（例: `1.50d` → `1.500000000000000000`、`-0.25d` → `-0.250000000000000000`）。指数表記は使わない（MUST）
 
 ---
 
@@ -851,6 +858,7 @@ P0 の標準ライブラリはすべて純粋関数であり、**その意味論
 | Field | `obj.name` |
 | Do | 早期リターン（`if (r.tag === "Err") return r;`） |
 | EffectCall | `await host.name(args)`（P1） |
+| Lit(decimal) | BigInt のスケール済み整数リテラル（例: `1.50d` → `1500000000000000000n`）。算術は `$dec_*` ヘルパ（BigInt、interp の i128 とビット一致） |
 
 ### 12.5 runtime.js
 
@@ -902,7 +910,7 @@ const host = {
 
 | フェーズ | 追加機能 | 変更点 |
 |---|---|---|
-| P1 | defn! 完全実装、effect、do-io、decimal、**prop評価（反例生成・縮小、fast-check相当）** | host DI、モックhost |
+| P1 | defn! 完全実装、effect、do-io、decimal、**prop評価（反例生成・縮小、fast-check相当）** | host DI、モックhost |（decimal は M23 で実装済み）
 | P2 | condition system（制限付き）、restart-case、handle、`!throws` | コールバック方式、REPLデバッガ |
 | P3 | 増分コンパイル、LSP、ジェネリクス本格化（ユーザー型変数）、FFI標準 | 関数単位キャッシュ |
 | P4 | WASMバックエンド（GC + Stack Switching）、完全なリスタート | サンドボックス、決定性 |

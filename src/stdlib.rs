@@ -29,6 +29,7 @@ fn entry(name: &str, vars: Vec<usize>, body: Type) -> (Rc<str>, Scheme) {
 
 pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
     let num = Type::Number;
+    let dec = Type::Dec;
     let str_t = Type::Str;
     let bool_t = Type::Bool;
     let nil_t = Type::Nil;
@@ -48,6 +49,8 @@ pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
         entry("max", vec![], fn_t(vec![num.clone(), num.clone()], num.clone())),
         entry("not", vec![], fn_t(vec![bool_t.clone()], bool_t.clone())),
         entry("str", vec![1], fn_t(vec![v(1)], str_t.clone())),
+        entry("to-dec", vec![], fn_t(vec![num.clone()], dec.clone())),
+        entry("to-num", vec![], fn_t(vec![dec.clone()], num.clone())),
         entry("str-concat", vec![], fn_t(vec![str_t.clone(), str_t.clone()], str_t.clone())),
         entry("str-slice", vec![], fn_t(vec![str_t.clone(), num.clone(), num.clone()], str_t.clone())),
         entry("len", vec![], fn_t(vec![str_t.clone()], num.clone())),

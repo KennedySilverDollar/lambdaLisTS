@@ -594,6 +594,7 @@ impl<'a> Checker<'a> {
         match value {
             Value::Nil => Type::Nil,
             Value::Num(_) => Type::Number,
+            Value::Dec(_) => Type::Dec,
             Value::Str(_) => Type::Str,
             Value::Bool(_) => Type::Bool,
             _ => Type::Nil,
@@ -657,6 +658,30 @@ impl<'a> Checker<'a> {
             }
             Core::App { f, args, span, .. } => {
                 if let Core::Var { name, .. } = f.as_ref() {
+                    // decimal（M23）: + - * / < <= > >= は「両引数が decimal」のとき decimal/bool を返す。
+                    // 両 number なら従来どおり。混在は type-mismatch（暗黙変換なし）。
+                    if matches!(
+                        name.as_ref(),
+                        "+" | "-" | "*" | "/" | "<" | "<=" | ">" | ">="
+                    ) && args.len() == 2
+                    {
+                        let t1 = prune(&self.infer(&args[0], &ast_path(path, &["args", "0"])), &self.subst);
+                        let t2 = prune(&self.infer(&args[1], &ast_path(path, &["args", "1"])), &self.subst);
+                        match (&t1, &t2) {
+                            (Type::Dec, Type::Dec) => {
+                                return if matches!(name.as_ref(), "<" | "<=" | ">" | ">=") {
+                                    Type::Bool
+                                } else {
+                                    Type::Dec
+                                };
+                            }
+                            (Type::Number, Type::Number) => {}
+                            _ => {
+                                self.type_mismatch(span, path, &t1, &t2);
+                                return Type::Nil;
+                            }
+                        }
+                    }
                     if let Some((_, kind)) = VARIADIC.iter().find(|(n, _)| *n == name.as_ref()) {
                         let param = if *kind == "string" {
                             Type::Str
@@ -1090,6 +1115,7 @@ impl<'a> Checker<'a> {
                     Value::Nil => Type::Nil,
                     Value::Str(sv) => Type::Literal(sv.clone()),
                     Value::Num(_) => Type::Number,
+                    Value::Dec(_) => Type::Dec,
                     Value::Bool(_) => Type::Bool,
                     _ => Type::Nil,
                 };

@@ -197,6 +197,7 @@ impl Backend for JsBackend {
 pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Num(n) => serde_json::Number::from_f64(*n).map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Value::Dec(s) => json!({ "tag": "Dec", "value": crate::decimal::fmt_dec(*s) }),
         Value::Str(s) => serde_json::Value::String(s.to_string()),
         Value::Bool(b) => serde_json::Value::Bool(*b),
         Value::Nil => serde_json::Value::Null,

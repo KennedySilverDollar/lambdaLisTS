@@ -22,7 +22,7 @@ const RESERVED: &[&str] = &[
     "type", "effect", "prop", "forall", "example", "import", "export", "Array", "union",
     "Result", "Option",
 ];
-const PRIMS: &[&str] = &["number", "string", "bool"];
+const PRIMS: &[&str] = &["number", "string", "bool", "decimal"];
 const OPERATORS: &[&str] = &["+", "-", "*", "/", "<", ">", "<=", ">=", "="];
 
 fn is_reserved(text: &str) -> bool {
@@ -821,6 +821,7 @@ impl<'a> Parser<'a> {
                     if PRIMS.contains(&&*t.text) {
                         let name = match &*t.text {
                             "number" => Prim::Number,
+                            "decimal" => Prim::Dec,
                             "string" => Prim::Str,
                             "bool" => Prim::Bool,
                             _ => Prim::Nil,
@@ -1228,6 +1229,17 @@ impl<'a> Parser<'a> {
                 };
                 Expr::Lit {
                     value: LitValue::Num(v),
+                    trivia: t.trivia.clone(),
+                    span: t.span.clone(),
+                }
+            }
+            TokenKind::Dec => {
+                let v = match &t.value {
+                    Some(TokenValue::Dec(s)) => s.clone(),
+                    _ => Rc::from("0"),
+                };
+                Expr::Lit {
+                    value: LitValue::Dec(v),
                     trivia: t.trivia.clone(),
                     span: t.span.clone(),
                 }

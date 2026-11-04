@@ -176,6 +176,7 @@ fn print_expr(e: &Expr, ind: &str) -> String {
             LitValue::Nil => "nil".to_string(),
             LitValue::Bool(b) => format!("{b}"),
             LitValue::Num(n) => format!("{n}"),
+            LitValue::Dec(s) => format!("{s}d"),
         },
         Expr::Sym { name, .. } => name.to_string(),
         Expr::FieldAccess { parts, .. } => parts
@@ -300,6 +301,7 @@ fn print_type(t: &TypeExpr) -> String {
     match t {
         TypeExpr::Prim { name, .. } => match name {
             Prim::Number => "number",
+            Prim::Dec => "decimal",
             Prim::Str => "string",
             Prim::Bool => "bool",
             Prim::Nil => "nil",
@@ -346,6 +348,7 @@ fn print_pattern(p: &Pat) -> String {
             LitValue::Nil => "nil".to_string(),
             LitValue::Bool(b) => format!("{b}"),
             LitValue::Num(n) => format!("{n}"),
+            LitValue::Dec(s) => format!("{s}d"),
         },
         Pat::Obj { fields, .. } => format!(
             "(obj {})",

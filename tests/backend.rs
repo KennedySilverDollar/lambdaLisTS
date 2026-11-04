@@ -539,3 +539,49 @@ console.log("calls " + JSON.stringify(calls));
         "記録内容の確認: {js_calls}"
     );
 }
+
+#[test]
+fn decimal_edge_js_golden_and_error_parity_with_interp() {
+    // golden 追記（生成 JS の BigInt lowering を固定）
+    let out = emit_fixture("decimal-edge").expect("emit decimal-edge");
+    assert!(out.js.contains("1500000000000000000n"), "{}", out.js);
+    assert!(out.js.contains("$dec_mul"), "{}", out.js);
+    assert!(out.js.contains("$json(actual)"), "{}", out.js);
+    assert_golden("decimal-edge.js", &out.js);
+    assert_golden("decimal-edge.js.map", &out.map);
+
+    // 実行時エラーの機械可読な一致: 0 除算とオーバーフローで interp と node が同じ文字列を出す
+    let src = "(export dv ov)\n(defn dv (a : decimal) (b : decimal) : decimal (/ a b))\n(defn ov (a : decimal) (b : decimal) : decimal (* a b))";
+    let out2 = emit_src(src, "dec-err.js").expect("emit");
+    let dir = temp_dir("dec-err");
+    write_out(&dir, "dec-err", &out2);
+    let driver = r#"import { dv, ov } from "./dec-err.js";
+const tryCall = (f, ...args) => { try { return "ok " + String(f(...args)); } catch (e) { return "err " + e.message; } };
+console.log(tryCall(dv, 1n * 10n ** 18n, 0n));
+console.log(tryCall(ov, 100000000000n * 10n ** 18n, 100000000000n * 10n ** 18n));
+"#;
+    std::fs::write(dir.join("run.js"), driver).expect("write driver");
+    let r = run_node(&dir, &["run.js"]);
+    let stdout = String::from_utf8_lossy(&r.stdout).into_owned();
+    assert_eq!(r.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&r.stderr));
+
+    // interp 側
+    let lex = lists::lexer::tokenize(src, "t.lts");
+    let (program, _) = lists::parser::parse_program(&lex);
+    let (defs, _) = lists::desugar::desugar(&program);
+    let env = lists::eval::global_env();
+    lists::eval::load_defs(&defs, &env);
+    let mut interp = lists::eval::Interp::new();
+    let dv = env.lookup("dv").expect("dv");
+    let ov = env.lookup("ov").expect("ov");
+    let s = lists::value::Value::Dec(lists::decimal::S);
+    let zero = lists::value::Value::Dec(0);
+    let big = lists::value::Value::Dec(100_000_000_000 * lists::decimal::S);
+    let e1 = interp.apply(dv, vec![s.clone(), zero]).expect_err("div by zero must error");
+    let e2 = interp.apply(ov, vec![big.clone(), big]).expect_err("overflow must error");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines[0], format!("err {}", e1.to_string().replace("runtime error: ", "")), "JS: {stdout}");
+    assert_eq!(lines[1], format!("err {}", e2.to_string().replace("runtime error: ", "")), "JS: {stdout}");
+    assert!(lines[0].contains("decimal-division-by-zero"), "{stdout}");
+    assert!(lines[1].contains("decimal-overflow"), "{stdout}");
+}
