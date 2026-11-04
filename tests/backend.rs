@@ -388,6 +388,10 @@ function expectThrow(name, f) {
 }
 expectThrow("cyclic-array", () => structuralEqual(a, a));
 expectThrow("cyclic-obj", () => structuralEqual(o, o));
+const x = {};
+const y = { x };
+x.y = y;
+expectThrow("cyclic-indirect", () => structuralEqual(x, x));
 const c = [9];
 console.log("acyclic " + structuralEqual([1, [2]], [1, [2]]));
 console.log("dag " + structuralEqual([c, c], [[9], [9]]));
@@ -404,6 +408,7 @@ console.log("fn " + structuralEqual(() => 1, () => 1));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("cyclic-array threw:"), "{stdout}");
     assert!(stdout.contains("cyclic-obj threw:"), "{stdout}");
+    assert!(stdout.contains("cyclic-indirect threw:"), "{stdout}");
     assert!(stdout.contains("cyclic structure"), "{stdout}");
     assert!(!stdout.contains("NO-THROW"), "{stdout}");
     assert!(stdout.contains("acyclic true"), "{stdout}");
