@@ -89,7 +89,7 @@ impl Interp {
         };
         let ok_v = |v: Value| Value::Ok(Box::new(v));
         let err_v = |v: Value| Value::Err(Box::new(v));
-        match b.kind {
+        match &b.kind {
             BuiltinKind::Add => Ok(Value::Num(num(&args[0])? + num(&args[1])?)),
             BuiltinKind::Sub => Ok(Value::Num(num(&args[0])? - num(&args[1])?)),
             BuiltinKind::Mul => Ok(Value::Num(num(&args[0])? * num(&args[1])?)),
@@ -255,6 +255,17 @@ impl Interp {
                     }
                 }
                 Ok(ok_v(Value::Array(out)))
+            }
+            BuiltinKind::HostMock {
+                effect,
+                default,
+                log,
+            } => {
+                log.borrow_mut().push(crate::host::HostCall {
+                    effect: effect.clone(),
+                    args: args.clone(),
+                });
+                Ok(default.clone())
             }
         }
     }

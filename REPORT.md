@@ -184,3 +184,18 @@ M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実
   - stdlib-edge.lts はスモーク S20 が件数 70 固定のため無変更（新規 example は新規 fixture 側に集約）。
 - **検証**: `cargo test` 206全パス（+5）、`LISTS_BACKEND=mock` acceptance 12/12、スモーク 20/20、warning 0。CLI compile+node で option-find.lts は example 2/2 ok（NegativeQty アームが生値で通ることを確認）。
 - **残課題**: なし（(a)(b) とも SPEC 反映済み。旧「Ok 包み」実装は跡形もなく除去済み）。
+
+---
+
+## 12. host DI とモック host（M21 基盤）
+
+目的: M21（effect 実行）の基盤となる host DI を設計・実装。言語機能の追加は行わず（defn! 完全実装自体は M19 で済）。設計書は `design/host-di.md`。
+
+- **設計（採用済み前提どおり）**: host は能力インターフェース。effect 宣言 `(effect name : sig)` の name→sig が実装へ 1対1 写像（interp: λ 関数値、将来 WASM: ホスト関数、JS: host オブジェクトのメソッド）。リソース系エフェクト（fuel 等）は effect 宣言を増やすだけで拡張され host 設計は不変。処理系本体は特定 host に依存せず、実装は外部から注入（§12.6 と同方針）。
+- **Rust 型** (`src/host.rs` 新規): ラン時 host は `Value::Obj`（effect 名 → ハンドラ）。`host_type(effects)` が effect 宣言から host の obj 型を導出（defn! 第1引数の型と一致）。ハンドラは `BuiltinKind::HostMock { effect, default, log }`（`log` は serde skip。BuiltinKind から Copy/Eq を外した）またはユーザー Closure。
+- **モック host**: `MockHost::from_effects` が effect ごとにハンドラを構築。呼び出しは `HostCall { effect, args }` を共有ログに記録し、戻りは `default_value(ret)`（nil→Nil, number→0, string→"", bool→false, Array→[], obj→各フィールド既定値, union→nil優先で先頭, Result→Err(既定E), fn 型→モックに含めない）。乱数・時刻を使わないので決定性 MUST を満たす。
+- **注入点**: (1) CLI/REPL: `lists repl --host none|mock`（未知名は exit 2）。(2) interp: `host::inject_host(&env, "host", &obj)`。REPL は effect 宣言を含む eval/reload のたびに `refresh_host` でモックを再構築して `host` 全局へ注入し、検査側は `ModuleCache.host_bindings` に `host : host_type(effects)` を登録して既知の全局として扱う（`Checker::new` が読み込む）。(3) テストランナー: `inject_host` を呼ぶだけ（現状の example は host リテラル明示渡しのため必須でない）。新 REPL op `host-log` が記録を JSON Lines で返す。
+- **JS 側は設計のみ**（M21へ引き継ぎ）: 生成 JS は host を defn! 第1引数のまま渡し `await host.<name>(args)`、グローバル host 宣言は禁止のまま。モックはテスト用ランナーが `host.mock.js` を差し込む形を提案（`design/host-di.md` §5）。差分提案として報告済み。
+- **テスト**: host.rs 単体 4本（host_type、default_value の決定性、モックの記録＋固定応答＋反復決定性、fn 戻りのスキップ）、tools.rs に REPL 経由の注入確認 3本（`--host mock` で example がモック host 経由で通り host-log に記録される、未知 `--host` は exit 2、既定では host なし）。
+- **検証**: `cargo test` 213全パス、`LISTS_BACKEND=mock` acceptance 12/12、スモーク 20/20、warning 0。SPEC.md・ゴールデン無変更（REPL の既存 op・ゴールデンは不変、host-log は追記のみ）。
+- **M21 への引き継ぎ**: design/host-di.md §6（JS 側モック host とログ差分テスト、`lists run` への host 注入、fuel 系エフェクト追加時の拡張確認、`host` 命名衝突の明文化）。

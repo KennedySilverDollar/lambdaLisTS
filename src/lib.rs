@@ -10,6 +10,7 @@ pub mod emit;
 pub mod eval;
 pub mod exhaustive;
 pub mod fmt;
+pub mod host;
 pub mod ir;
 pub mod lexer;
 pub mod names;

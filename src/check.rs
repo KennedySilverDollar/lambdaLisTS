@@ -39,6 +39,9 @@ pub struct ModuleResult {
 pub struct ModuleCache {
     pub modules: BTreeMap<String, ModuleResult>,
     pub graph: ModuleGraph,
+    /// 注入された host の束縛（名前 → host の obj 型）。REPL の `--host` が設定する。
+    /// ここにある名前は値名前空間の既知の全局として検査に通る（host DI）。
+    pub host_bindings: BTreeMap<Rc<str>, Type>,
 }
 
 pub fn new_module_cache() -> ModuleCache {
@@ -128,7 +131,8 @@ pub struct Checker<'a> {
 
 impl<'a> Checker<'a> {
     pub fn new(file: &'a str, cache: &'a mut ModuleCache) -> Self {
-        Checker {
+        let host_bindings = cache.host_bindings.clone();
+        let mut checker = Checker {
             file,
             cache,
             diagnostics: Vec::new(),
@@ -142,7 +146,13 @@ impl<'a> Checker<'a> {
             predef: BTreeSet::new(),
             defn_purity: BTreeMap::new(),
             in_impure_defn: false,
+        };
+        // 注入された host は既知の全局として扱う（host DI）
+        for (n, t) in host_bindings {
+            checker.values.insert(n.clone(), t.clone());
+            checker.predef.insert(n);
         }
+        checker
     }
 
     pub fn run(&mut self, defs: &[CoreDef]) -> ModuleResult {

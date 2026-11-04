@@ -27,7 +27,7 @@ pub struct Closure {
     pub name: Option<Rc<str>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BuiltinKind {
     Add,
     Sub,
@@ -66,6 +66,14 @@ pub enum BuiltinKind {
     Bind,
     MapResult,
     Traverse,
+    /// モック host のハンドラ（host.rs）。呼び出しを log に記録し、default を返す。
+    /// log は実行時の記録なのでシリアライズしない。
+    HostMock {
+        effect: Rc<str>,
+        default: Value,
+        #[serde(skip)]
+        log: Rc<std::cell::RefCell<Vec<crate::host::HostCall>>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

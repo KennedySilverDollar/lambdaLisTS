@@ -262,3 +262,55 @@ fn diagnostics_contain_no_js_engine_text() {
         }
     }
 }
+
+#[test]
+fn repl_host_mock_injection_records_effect_calls() {
+    // host DI: `lists repl --host mock` でモック host が `host` 全局に注入され、
+    // example から defn! 経由でエフェクトが呼ばれると host-log に記録される。
+    let input = "{\"id\": 1, \"op\": \"eval\", \"src\": \"(effect log : (fn (s : string) : nil))\\n(defn! f (host : (obj (log : (fn (s : string) : nil)))) (s : string) : nil (log! s))\"}\n         {\"id\": 2, \"op\": \"eval\", \"src\": \"(example (f host \\\"hi\\\") => nil)\"}\n         {\"id\": 3, \"op\": \"test\"}\n         {\"id\": 4, \"op\": \"host-log\"}\n         {\"id\": 5, \"op\": \"quit\"}\n";
+    let out = run_lists(&["repl", "--host", "mock"], Some(input));
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let responses: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("1行1JSON"))
+        .collect();
+    assert_eq!(responses.len(), 4, "quit は応答しない: {stdout}");
+    assert_eq!(responses[0]["ok"], true, "effect+defn! の eval: {responses:?}");
+    assert_eq!(responses[1]["ok"], true, "host を使う example の eval: {responses:?}");
+    assert_eq!(
+        responses[2],
+        serde_json::json!({"id": 3, "ok": true, "results": [{"example": "example 0", "pass": true}]}),
+        "注入されたモック host 経由で example が通る: {responses:?}"
+    );
+    let hi_arg = "hi".to_string(); // print_value は文字列を引用符なしで印字（§11.6）
+    assert_eq!(
+        responses[3],
+        serde_json::json!({
+            "id": 4, "ok": true, "host": "mock",
+            "calls": [{"effect": "log", "args": [hi_arg]}]
+        }),
+        "モック host の呼び出し記録: {responses:?}"
+    );
+}
+
+#[test]
+fn repl_host_option_rejects_unknown_name() {
+    let out = run_lists(&["repl", "--host", "bogus"], None);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown --host"), "{stderr}");
+}
+
+#[test]
+fn repl_without_host_has_no_host_binding() {
+    let input = "{\"id\": 1, \"op\": \"host-log\"}\n{\"id\": 2, \"op\": \"quit\"}\n";
+    let out = run_lists(&["repl"], Some(input));
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"host\":\"none\"") && stdout.contains("\"calls\":[]"),
+        "{stdout}"
+    );
+}

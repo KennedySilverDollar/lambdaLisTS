@@ -32,7 +32,11 @@ enum Commands {
     Fmt {
         files: Vec<PathBuf>,
     },
-    Repl,
+    Repl {
+        /// 注入する host（none=注入なし、mock=モック host）
+        #[arg(long, default_value = "none")]
+        host: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -44,8 +48,8 @@ fn main() -> ExitCode {
             backend,
         } => ExitCode::from(compile(&files, out.as_deref(), &backend) as u8),
         Commands::Fmt { files } => ExitCode::from(fmt_cmd(&files) as u8),
-        Commands::Repl => {
-            match repl::run() {
+        Commands::Repl { host } => {
+            match repl::run_with_host(&host) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("repl error: {e}");
