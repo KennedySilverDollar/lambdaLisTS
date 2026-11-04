@@ -1,4 +1,0 @@
-;; 未 export の hidden を import → not-exported
-(import "./mod-pub.lts" (hidden))
-
-(defn f () : number (hidden))

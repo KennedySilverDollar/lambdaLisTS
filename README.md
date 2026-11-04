@@ -5,24 +5,23 @@
 ## セットアップ
 
 ```sh
-npm install
-npm run build    # tsc → dist/（source map 付き）
+cargo build      # バイナリは target/debug/lists
 ```
 
 ## テスト
 
 ```sh
-npm test         # vitest run（単体 + 受け入れ T1–T9、全203件）
+cargo test       # 単体 + 受け入れ T1–T9（全162件）
 ```
 
 ## 使い方
 
-CLI は `npm run cli -- <command> ...`（ビルド後は `node dist/tools/cli.js <command> ...`）です。
+CLI は `cargo run -- <command> ...`（ビルド後は `target/debug/lists <command> ...`）です。
 
 ### compile — 検査 + JS 生成（§10.5）
 
 ```sh
-npm run cli -- compile test/fixtures/money.lts test/fixtures/cart.lts --out /tmp/out
+cargo run -- compile tests/fixtures/money.lts tests/fixtures/cart.lts --out /tmp/out
 ```
 
 - 診断は `Diagnostic[]` の JSON を stdout に出力（エラーなしは `[]`）。exit code は 0 / 1。
@@ -37,7 +36,7 @@ node /tmp/out/cart.js
 ### fmt — 一意フォーマット（in-place、§10.3）
 
 ```sh
-npm run cli -- fmt test/fixtures/money.lts
+cargo run -- fmt tests/fixtures/money.lts
 ```
 
 2スペース字下げ、`defn`/`match`/`do`/`cond`/`example` は要素ごとに改行、コメントは保持されます。冪等（`fmt(fmt(x)) === fmt(x)`）です。
@@ -45,7 +44,7 @@ npm run cli -- fmt test/fixtures/money.lts
 ### repl — JSON Lines REPL（§10.1）
 
 ```sh
-npm run cli -- repl
+cargo run -- repl
 ```
 
 stdin から1行1JSON、stdout に1行1JSON で応答します。
@@ -54,7 +53,7 @@ stdin から1行1JSON、stdout に1行1JSON で応答します。
 {"id": 1, "op": "eval", "src": "(defn add (a : number) (b : number) : number (+ a b))"}
 {"id": 2, "op": "test"}
 {"id": 3, "op": "prop", "name": "add-money commutative"}
-{"id": 4, "op": "reload", "file": "./test/fixtures/cart.lts"}
+{"id": 4, "op": "reload", "file": "./tests/fixtures/cart.lts"}
 {"id": 5, "op": "type-of", "src": "add"}
 {"id": 6, "op": "quit"}
 ```
@@ -86,7 +85,7 @@ stdin から1行1JSON、stdout に1行1JSON で応答します。
   => (ok (obj (amount 3) (currency "JPY"))))
 ```
 
-構文の full な定義は SPEC.md §2–§3、標準ライブラリは §11 を参照してください。サンプルは `test/fixtures/`（付録A: money.lts / cart.lts、付録B: broken/effects/stock/cycle）にあります。
+構文の full な定義は SPEC.md §2–§3、標準ライブラリは §11 を参照してください。サンプルは `tests/fixtures/`（付録A: money.lts / cart.lts、付録B: broken/effects/stock/cycle）にあります。
 
 ## P0 の制限
 
@@ -98,23 +97,41 @@ stdin から1行1JSON、stdout に1行1JSON で応答します。
 
 ```
 src/
-  lexer/      token.ts, lexer.ts            §2 字句
-  parser/     ast.ts, parser.ts             §3 構文
-  core/       ir.ts, desugar.ts             §4/§5 脱糖 → Core IR
-  types/      type.ts, unify.ts, stdlib.ts, check.ts, exhaustive.ts   §6/§11 型検査
-  effects/    check.ts                      §7 エフェクト検査
-  modules/    resolver.ts                   §3.8 モジュール解決
-  interp/     value.ts, env.ts, stdlib.ts, eval.ts   §8 インタープリタ
-  backend/    runtime.ts, sourcemap.ts, js.ts        §12 JS バックエンド
-  tools/      cli.ts, repl.ts, fmt.ts       §10 CLI / REPL / fmt
-  diagnostic.ts                             §9 診断モデル
-test/         単体テスト + fixtures/ + acceptance/（受け入れ T1–T9）
-docs/         README.md（詳細・実測値・既知の差異）
+  main.rs         CLI エントリ（clap）
+  lib.rs          pub mod 宣言
+  span.rs         Span
+  diagnostic.rs   Diagnostic / Patch / AST パス（§9）
+  token.rs        トークン種
+  lexer.rs        §2 字句
+  ast.rs          サーフェス AST（トリビア含む）
+  parser.rs       §3 ベストエフォート回復
+  ir.rs           Core IR（§5）
+  desugar.rs      §4 意味的脱糖 → Core IR
+  types.rs        Type / Scheme / 正規化・正規表現（§6.1–6.2）
+  unify.rs        §6.4 単一化
+  check.rs        §6.3 双方向型付け
+  stdlib.rs       stdlib 登録（§11）
+  exhaustive.rs   §6.5 網羅性検査
+  effects.rs      §7 エフェクト検査
+  resolver.rs     §3.8 モジュール解決
+  value.rs        Value / structuralEqual（§8.2–8.3）
+  eval.rs         §8 インタプリタ
+  emit.rs         §12 JS lowering
+  runtime.rs      backend/runtime.js を include_str! で埋め込む
+  sourcemap_out.rs  source map v3 生成
+  fmt.rs          §10.3 一貫フォーマッタ
+  repl.rs         §10.1 JSON Lines REPL
+  backend/runtime.js  生成JSが import するランタイム（唯一の非Rustソース）
+tests/          cargo の統合テスト
+  fixtures/     付録A/B の .lts
+  golden/       スナップショット（診断JSON / JS出力 / fmt 結果）
+  acceptance/   T1–T9 差分テスト（§13）
+docs/           README.md（詳細・既知の相違）
 ```
 
 ## 受け入れテスト（SPEC.md §13）
 
-`npm test` に T1〜T9 が含まれます（全203件緑）:
+`cargo test` に T1〜T9 が含まれます（全162件）:
 
 | テスト | 内容 | 状態 |
 |---|---|---|
@@ -130,8 +147,11 @@ docs/         README.md（詳細・実測値・既知の差異）
 
 詳細な説明・既知の差異は [docs/README.md](docs/README.md) を参照してください。
 
-## Rust 版（P0 移植の進行中）
+## 実装
 
-Rust 実装はルートの `Cargo.toml`（`cargo build` / `cargo test`）。現時点の進捗: M0 スキャフォールド〜M7（レキサ・パーサ・脱糖・双方向型検査・網羅性検査・エフェクト/モジュール検査・Core IR インタープリタ）まで完了。
+このプロジェクトは **Rust（cargo）のみ** で実装されています。旧 TypeScript/npm ベースの実装（`package.json`、`tsconfig.json`、`src/**/*.ts`、vitest の `test/`）は撤去済みです。
 
-- Rust インタープリタの再帰深さ上限は `src/eval.rs` の `MAX_CALL_DEPTH = 10000` です（SPEC §8.5）。上限超過時はパニックせず `internal-error` を返します。
+- ビルド: `cargo build`、テスト: `cargo test`、CLI: `cargo run -- <command> ...`
+- 生成した JS の実行には Node.js ≥ 20 が必要です（コンパイラ自体は Node に依存しません）
+- `src/backend/runtime.js` は生成JSが `import` するランタイムで、`src/runtime.rs` から `include_str!` で埋め込まれるため削除しないでください
+- Rust インタプリタの再帰深さ上限は `src/eval.rs` > `MAX_CALL_DEPTH = 10000` です（SPEC §8.5）。上限超過時はパニックせず `internal-error` を返します。

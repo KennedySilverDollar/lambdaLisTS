@@ -1,4 +1,0 @@
-;; 存在しないファイル → import-not-found
-(import "./no-such-file.lts" (x))
-
-(defn f () : number 1)
