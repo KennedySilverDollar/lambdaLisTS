@@ -301,31 +301,32 @@ console.log("err-shape " + JSON.stringify(err("e")));
     use std::rc::Rc;
     let obj = |pairs: Vec<(&str, Value)>| Value::Obj(pairs.into_iter().map(|(k, v)| (Rc::from(k), v)).collect());
     let num = |n: f64| Value::Num(n);
+    let se = |a: &Value, b: &Value| structural_equal(a, b).unwrap_or(false);
     let expected: Vec<(&str, bool)> = vec![
-        ("empty-obj", structural_equal(&obj(vec![]), &obj(vec![]))),
-        ("empty-vs-nonempty", structural_equal(&obj(vec![]), &obj(vec![("a", num(1.0))]))),
+        ("empty-obj", se(&obj(vec![]), &obj(vec![]))),
+        ("empty-vs-nonempty", se(&obj(vec![]), &obj(vec![("a", num(1.0))]))),
         (
             "nested",
-            structural_equal(
+            se(
                 &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(true)]))])]),
                 &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(true)]))])]),
             ),
         ),
         (
             "nested-diff",
-            structural_equal(
+            se(
                 &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(true)]))])]),
                 &Value::Array(vec![num(1.0), obj(vec![("a", Value::Array(vec![Value::Bool(false)]))])]),
             ),
         ),
-        ("nan", structural_equal(&num(f64::NAN), &num(f64::NAN))),
-        ("minus-zero", structural_equal(&num(-0.0), &num(0.0))),
-        ("num", structural_equal(&num(1.0), &num(1.0))),
-        ("ok-ok", structural_equal(&Value::Ok(Box::new(num(1.0))), &Value::Ok(Box::new(num(1.0))))),
-        ("ok-err", structural_equal(&Value::Ok(Box::new(num(1.0))), &Value::Err(Box::new(num(1.0))))),
-        ("nil-nil", structural_equal(&Value::Nil, &Value::Nil)),
-        ("nil-obj", structural_equal(&Value::Nil, &obj(vec![]))),
-        ("str", structural_equal(&Value::Str(Rc::from("a")), &Value::Str(Rc::from("a")))),
+        ("nan", se(&num(f64::NAN), &num(f64::NAN))),
+        ("minus-zero", se(&num(-0.0), &num(0.0))),
+        ("num", se(&num(1.0), &num(1.0))),
+        ("ok-ok", se(&Value::Ok(Box::new(num(1.0))), &Value::Ok(Box::new(num(1.0))))),
+        ("ok-err", se(&Value::Ok(Box::new(num(1.0))), &Value::Err(Box::new(num(1.0))))),
+        ("nil-nil", se(&Value::Nil, &Value::Nil)),
+        ("nil-obj", se(&Value::Nil, &obj(vec![]))),
+        ("str", se(&Value::Str(Rc::from("a")), &Value::Str(Rc::from("a")))),
     ];
     for (name, want) in expected {
         let js = got.get(name).unwrap_or_else(|| panic!("missing {name} in {stdout}"));
@@ -364,4 +365,64 @@ fn source_map_covers_loop_converted_tail_call() {
         }
     }
     assert!(found, "トランポリンの thunk 行に source map マッピングが必要");
+}
+
+// M16（v0.3 事前確定 #2）: runtime.js の structuralEqual は循環構造を検出して実行時エラー（throw）にする（SPEC §8.3/§8.6）。
+#[test]
+fn structural_equal_throws_on_cyclic_structures() {
+    let dir = temp_dir("cyclic-eq");
+    std::fs::write(dir.join("runtime.js"), lists::runtime::RUNTIME_JS).expect("write runtime");
+    let script = r#"
+import { structuralEqual } from "./runtime.js";
+const a = [1];
+a.push(a);
+const o = { x: 1 };
+o.self = o;
+function expectThrow(name, f) {
+  try {
+    f();
+    console.log(name + " NO-THROW");
+  } catch (e) {
+    console.log(name + " threw: " + (e && e.message ? e.message : String(e)));
+  }
+}
+expectThrow("cyclic-array", () => structuralEqual(a, a));
+expectThrow("cyclic-obj", () => structuralEqual(o, o));
+const c = [9];
+console.log("acyclic " + structuralEqual([1, [2]], [1, [2]]));
+console.log("dag " + structuralEqual([c, c], [[9], [9]]));
+console.log("fn " + structuralEqual(() => 1, () => 1));
+"#;
+    std::fs::write(dir.join("check.js"), script).expect("write check.js");
+    let out = run_node(&dir, &["check.js"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("cyclic-array threw:"), "{stdout}");
+    assert!(stdout.contains("cyclic-obj threw:"), "{stdout}");
+    assert!(stdout.contains("cyclic structure"), "{stdout}");
+    assert!(!stdout.contains("NO-THROW"), "{stdout}");
+    assert!(stdout.contains("acyclic true"), "{stdout}");
+    assert!(stdout.contains("dag true"), "{stdout}");
+    assert!(stdout.contains("fn false"), "{stdout}");
+}
+
+// M16（v0.3 事前確定 #4）: stdlib-edge.lts の生成JSは決定論的で、§11.6 のローカル補助関数（$print/$slice_bounds）を含む。
+// runtime.js の export は ok/err/structuralEqual の3つのまま（§12.5 MUST）。
+#[test]
+fn stdlib_edge_emit_is_deterministic_and_uses_local_helpers() {
+    let r1 = emit_fixture("stdlib-edge").expect("emit stdlib-edge");
+    let r2 = emit_fixture("stdlib-edge").expect("emit stdlib-edge again");
+    assert_eq!(r1.js, r2.js, "生成JSは決定論的であること");
+    assert_eq!(r1.map, r2.map, "source map も決定論的であること");
+    assert!(r1.js.contains("function $print("), "{}", r1.js);
+    assert!(r1.js.contains("function $print_num("), "{}", r1.js);
+    assert!(r1.js.contains("function $slice_bounds("), "{}", r1.js);
+    assert!(r1.js.contains("const $stdlib_str = (a) => $print(a);"), "{}", r1.js);
+    assert!(r1.js.contains("const $stdlib_len = (s) => [...s].length;"), "{}", r1.js);
+    assert!(!r1.js.contains("$stdlib_split"), "{}", r1.js);
 }

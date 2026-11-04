@@ -1,0 +1,52 @@
+;; stdlib-edge.lts — SPEC §11.6（v0.3 事前確定 #4）: stdlib 5件 + 印字規約の差分テスト用 fixture。
+;; min/max の NaN、len/str-slice の char 単位、slice/str-slice の slice_bounds、nth の小数添字、str の印字規約。
+
+;; min/max: 片方が NaN なら NaN でない側を返す（IEEE754 minNum/maxNum、§11.6）
+(example (min (/ 0 0) 1) => 1)
+(example (max 1 (/ 0 0)) => 1)
+(example (str (min (/ 0 0) (/ 0 0))) => "NaN")
+(example (= (/ 0 0) (/ 0 0)) => false)
+
+;; len は Unicode スカラ値（char）の数。絵文字は 1 文字（§11.6）
+(example (len "😀a") => 2)
+(example (len "abc") => 3)
+
+;; str-slice は char 単位で [start, end)。NaN end は len、負は len+x、end<start は空（§11.6）
+(example (str-slice "😀bc" 0 1) => "😀")
+(example (str-slice "abc" 0 (/ 0 0)) => "abc")
+(example (str-slice "abcdef" -2 99) => "ef")
+(example (str-slice "abcdef" 4 2) => "")
+
+;; slice（配列）も同じ slice_bounds 規則（§11.6）
+(example (slice (array 1 2 3) 0 (/ 0 0)) => (array 1 2 3))
+(example (count (slice (array 1 2 3) 2 1)) => 0)
+(example (slice (array 1 2 3) -2 99) => (array 2 3))
+
+;; nth: 小数添字は 0 方向へ切り捨て、範囲外・NaN は nil（§11.6）
+(example (= (nth (array 10 20 30) 1.9) (nth (array 10 20 30) 1)) => true)
+(example (= (nth (array 10 20 30) 5) (nth (array 10 20 30) 99)) => true)
+(example (= (nth (array 10 20 30) (/ 0 0)) nil) => true)
+
+;; str の印字規約（§11.6 / 付録C #10。Rust print_value が規範）
+(example (str 1) => "1")
+(example (str -0) => "-0")
+(example (str 0.1) => "0.1")
+(example (str 1e21) => "1000000000000000000000")
+(example (str 1e-7) => "0.0000001")
+(example (str 1.5e-10) => "0.00000000015")
+(example (str 1.23e25) => "12300000000000000000000000")
+(example (str (/ 1 0)) => "Infinity")
+(example (str (/ -1 0)) => "-Infinity")
+(example (str (/ 0 0)) => "NaN")
+(example (str "hi") => "hi")
+(example (str true) => "true")
+(example (str nil) => "nil")
+(example (str (array (array 1 2) (array 3 4))) => "[[1 2] [3 4]]")
+(example (str (obj (b 2) (a 1))) => "{a: 1, b: 2}")
+(example (str (ok 1)) => "(ok 1)")
+(example (str (err "x")) => "(err x)")
+
+;; 構造的等価（§8.3）
+(example (= (array 1 2) (array 1 2)) => true)
+(example (= (obj (a 1)) (obj (a 1))) => true)
+(example (= (array 1) (array 1 2)) => false)

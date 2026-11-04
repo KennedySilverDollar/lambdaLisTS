@@ -45,6 +45,7 @@ Scope: Pure core + Result + minimal effects checking
 - 規範の優先順位：**言語規定（文章） ＞ 本書の Rust 型定義 ＞ テキスト版の TS 定義**。食い違いがあれば言語規定が勝つ。
 - Rust 記法上の調整（`else_` / `ResultT` / `FnT` / `Str` 等の命名、パターンへの span 追加）は §付録C に列挙する。意味論的な変更ではない。
 - コンパイラ実装の規約（依存・unsafe 禁止等）は本書ではなく `GUIDE.md`（Rust版）が持つ。
+- 本版ではさらに、v0.3 移行前の確定事項として次の4点を規範へ反映済みである（§8.3・§8.6・§11.6・§12.5・付録C）:（1）数値は IEEE754 binary64（f64）のみの単一の数値型、（2）循環構造上の `=` は循環検出による実行時エラー、（3）§8.6 の実行時エラー定義のバックエンド中立化、（4）stdlib 5件と印字規約は §8.6・付録C・Rust 実装を規範とし JS 側を修正する。
 
 ---
 
@@ -514,9 +515,11 @@ pub struct Closure {
 - 配列：長さと各要素の再帰的等価
 - オブジェクト：キー集合と各値の再帰的等価
 - Result：tag と value の等価
+- 関数（クロージャ・組み込み関数）：参照等価（同一インスタンスのみ等しい）
+- **P0 では値は循環構造を持たない（循環構造を作る構文が存在しない）ため、`=` は常に停止する（MUST）**。将来の host 連携等で循環構造が値に現れた場合、`=` は循環を検出した時点で実行時エラー（§8.6）とし、無限ループしてはならない（MUST）。検出は比較経路上で同一の値対を再訪したときに行う。
 
 ```rust
-pub fn structural_equal(a: &Value, b: &Value) -> bool;
+pub fn structural_equal(a: &Value, b: &Value) -> Result<bool, EqualError>;
 ```
 
 ### 8.4 Result の伝播
@@ -531,8 +534,9 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 
 ### 8.6 数値と実行時エラー
 
-- number は IEEE754 倍精度浮動小数点（JS 準拠）。Rust の `f64` は IEEE754 binary64 であり、JS と**同一の演算結果**を与える。NaN・±Infinity は number の値。`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN（例外ではない）。decimal は P1。
-- P0（純粋関数のみ）における「実行時エラー」とは、JS エンジンが投げる実行時例外（RangeError: Maximum call stack size exceeded 等）を指す。T8 の source map 検証はこれを対象とする。Rust インタープリタ側は対応する内部診断（深さ上限超過）とする。
+- **number は IEEE754 binary64（f64）のみから成る単一の数値型であり、整数型は存在しない（MUST）**。リテラルは正しく丸められた 10進→binary64 変換で値が決まる（オーバーフローは ±Infinity）。すべての算術・比較は IEEE754 の例外なき演算に従い（`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN）、NaN・±Infinity も number 値である。2^53 を超える整数値の丸めは仕様上の値であり、`=` では NaN は NaN と等しくない（§8.3）。decimal は P1。
+- **P0（純粋関数のみ）における「実行時エラー」はバックエンド中立に定義する（MUST）**:プログラムの実行が継続できない意味論上の事態であり、各バックエンドの実行時例外として観測される。JS バックエンドでは JS の実行時例外（例:非末尾再帰の深さによるスタック枯渇）、WASM バックエンドでは trap 等となる。**例外の型名・メッセージ・スタック表現はバックエンド依存であり規範の対象外**とし、.lts 行への対応付けは source map（T8）が担う。Rust インタプリタは対応する内部診断（深さ上限超過）を返す。
+- **循環構造を含む値に対する `=` は、循環を検出した時点で実行時エラーとする（§8.3、MUST）**。
 
 ---
 
@@ -763,6 +767,20 @@ lists repl                                 # JSON Lines REPL
 
 P0の標準ライブラリは上記のみ。decimal、effect、defn! の完全実装は P1。
 
+### 11.6 P0 標準ライブラリの規範的意味論と印字規約
+
+P0 の標準ライブラリはすべて純粋関数であり、**その意味論は §8.6 と付録C および Rust 実装（`src/eval.rs` の組み込み実装と `src/value.rs` の `print_value`）を規範とする（MUST）**。各バックエンドの実装はこれと一致しなければならず（差分テスト T7 系が検証する）、食い違いは実装バグである。
+
+- `min` / `max`:片方が NaN ならば NaN でない側を返す（両方 NaN なら NaN）。すなわち IEEE754 minNum/maxNum に従う（MUST）。
+- `len`:文字列の長さは **Unicode スカラ値（char）の数**であり、UTF-16 コード単位数ではない（MUST）。
+- `str-slice` / `slice`:文字列は char 単位、配列は要素単位で半開区間 `[start, end)` を切り出す。境界規則（`slice_bounds` と呼ぶ）:start/end が NaN ならばそれぞれ 0 / len とする。負の値は `len + x` として 0 にクランプし、正の値は len にクランプする。end < start ならば空とする（MUST）。
+- `nth`:添字 `i` が 0 以上で配列長未満のとき `ok(arr[trunc(i)])`、さもなくば `nil`（MUST）。小数添字は 0 方向へ切り捨てる（`1.9` は `1`）。
+- `str`（印字規約）:値 → 文字列の規則は次のとおり（MUST）。付録C #10 の `print_value` が規範的写像である。
+  - `nil` → `nil`、`bool` → `true` / `false`、`string` → そのまま（引用符なし）
+  - `number` → NaN は `NaN`、±Infinity は `Infinity` / `-Infinity`、-0 は `-0`、それ以外は **最短往復10進表記で指数表記を用いない**（例:`1` → `1`、`0.1` → `0.1`、`1e21` → `1000000000000000000000`、`1e-7` → `0.0000001`）
+  - 配列 → `[a b c]`（空白区切り）、オブジェクト → `{k: v, ...}`（キーは UTF-8 バイト順（コードポイント順）にソート）、Result → `(ok v)` / `(err v)`、関数 → `<fn>`
+  - （JS バックエンドの注意:Result は `{tag, value}` 形状に lowering されるため、`tag` と `value` の2キーのみを持つ obj と印字上区別できない。P0 の型検査では両者を `=` で比較することはできない）
+
 ---
 
 ## 12. JavaScript バックエンド
@@ -812,6 +830,8 @@ export function structuralEqual(a, b) { /* 再帰的等価 */ }
 ```
 
 `bind`・`map-result`・`traverse` は生成コードにインライン展開（runtimeに置かない）。
+
+`structuralEqual` は循環構造を検出した場合に実行時エラー（throw）を送出する（§8.3、MUST）。export はこの3つのまま増やさない（MUST）。`str` の印字やスライス境界など stdlib の規範的意味論（§11.6）は、生成コード側のローカル補助関数（`$print`、`$slice_bounds` 等）で実装してよい（付録C #11）。
 
 ### 12.6 ホストインターフェース（P1）
 
@@ -1028,6 +1048,8 @@ const host = {
 7. **serde の `rc` feature**：`Rc<str>` の直列化に必要（Cargo.toml で `serde = { version = "...", features = ["rc"] }`）。
 8. **エラー取り扱い**：ライブラリ経路で `unwrap`/`expect`/パニックを置かない。回復不能は internal-error 診断へ。`unreachable!` は列挙網羅用に限る。
 9. **実装規約の詳細**（依存、unsafe 禁止、モジュール構成、テスト戦略）は `GUIDE.md`（Rust版）が規範。
+10. **`str` の印字規約**:`src/value.rs` の `print_value` が規範的写像である（§11.6）。特に number は Rust の `f64` Display（最短往復・指数表記なし）に従い、NaN/±Infinity/-0 は `NaN`/`Infinity`/`-Infinity`/`-0` と印字する。JS の `String(n)` は指数表記（`1e+21` 等）になるため、生成コード側で指数展開する補助関数（`$print_num`）を用いること。
+11. **stdlib の lowering 一致**:`src/emit.rs` の `$stdlib_<name>` は §11.6 の規範的意味論と一致しなければならない（MUST）:min/max の NaN 処理、len/str-slice の char 単位、slice/str-slice の `slice_bounds` 規則、nth の添字切り捨て。これらは生成ファイル内のローカル補助関数（`$slice_bounds` 等）で実装し、`runtime.js` の export は §12.5 の3つのままとする。構造的等価（`=`）は `structuralEqual` に一本化し、循環検出（§8.3）を含む。
 
 ---
 

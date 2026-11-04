@@ -222,5 +222,5 @@ pub fn assert_golden_json(label: &str, actual: Json) {
 }
 
 pub fn values_equal(a: &Value, b: &Value) -> bool {
-    structural_equal(a, b)
+    structural_equal(a, b).unwrap_or(false)
 }

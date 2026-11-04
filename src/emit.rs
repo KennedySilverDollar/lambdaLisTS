@@ -20,6 +20,12 @@ const JS_RESERVED: &[&str] = &[
 
 const RUNTIME_EXPORTS: &[&str] = &["ok", "err", "structuralEqual"];
 
+// SPEC §11.6/付録C #11: slice/str-slice の境界規則（slice_bounds）の生成コード側実装。
+const SLICE_BOUNDS_JS: &str = "function $slice_bounds(len, start, end) {\n  const s = Number.isNaN(start) ? 0 : start < 0 ? Math.max(len + start, 0) : Math.min(start, len);\n  const e = Number.isNaN(end) ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);\n  return [Math.trunc(s), Math.trunc(Math.max(e, s))];\n}\n";
+
+// SPEC §11.6/付録C #10: str の印字規約（print_value 互換）。f64 は指数表記を展開する。
+const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (Array.isArray(v)) return \"[\" + v.map($print).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $print_num(n) {\n  if (Number.isNaN(n)) return \"NaN\";\n  if (n === Infinity) return \"Infinity\";\n  if (n === -Infinity) return \"-Infinity\";\n  if (Object.is(n, -0)) return \"-0\";\n  const s = String(n);\n  if (s.indexOf(\"e\") < 0 && s.indexOf(\"E\") < 0) return s;\n  const m = /^(-?)(\\d+)(?:\\.(\\d+))?[eE]([+-]?\\d+)$/.exec(s);\n  if (!m) return s;\n  const sign = m[1];\n  const digits = m[2] + (m[3] || \"\");\n  const point = m[2].length + parseInt(m[4], 10);\n  if (point <= 0) return sign + \"0.\" + \"0\".repeat(-point) + digits;\n  if (point >= digits.length) return sign + digits + \"0\".repeat(point - digits.length);\n  return sign + digits.slice(0, point) + \".\" + digits.slice(point);\n}\nfunction $cmp_str(a, b) {\n  const pa = [...a];\n  const pb = [...b];\n  const n = Math.min(pa.length, pb.length);\n  for (let i = 0; i < n; i++) {\n    const d = pa[i].codePointAt(0) - pb[i].codePointAt(0);\n    if (d !== 0) return d;\n  }\n  return pa.length - pb.length;\n}\n";
+
 pub fn js_name(name: &str) -> String {
     let mut n = name.replace('-', "_");
     if n.ends_with('?') {
@@ -515,6 +521,12 @@ impl<'a> Gen<'a> {
         if !imports.is_empty() {
             out += &format!("import {{ {} }} from \"./runtime.js\";\n", imports.join(", "));
         }
+        if self.stdlib_used.contains("slice") || self.stdlib_used.contains("str-slice") {
+            out += SLICE_BOUNDS_JS;
+        }
+        if self.stdlib_used.contains("str") {
+            out += PRINT_JS;
+        }
         for name in &self.stdlib_used {
             out += &format!("const {} = {};\n", stdlib_js_name(name), self.stdlib_impl(name));
         }
@@ -539,19 +551,21 @@ impl<'a> Gen<'a> {
             "=" => format!("(a, b) => {se}(a, b)"),
             "mod" => "(a, b) => a % b".to_string(),
             "abs" => "(a) => Math.abs(a)".to_string(),
-            "min" => "(a, b) => Math.min(a, b)".to_string(),
-            "max" => "(a, b) => Math.max(a, b)".to_string(),
+            "min" => "(a, b) => (Number.isNaN(a) ? b : Number.isNaN(b) ? a : Math.min(a, b))".to_string(),
+            "max" => "(a, b) => (Number.isNaN(a) ? b : Number.isNaN(b) ? a : Math.max(a, b))".to_string(),
             "not" => "(a) => !a".to_string(),
-            "str" => "(a) => (a === null ? \"nil\" : typeof a === \"string\" ? a : String(a))".to_string(),
+            "str" => "(a) => $print(a)".to_string(),
             "str-concat" => "(...a) => a.join(\"\")".to_string(),
-            "str-slice" => "(s, i, j) => s.slice(i, j)".to_string(),
-            "len" => "(s) => s.length".to_string(),
+            "str-slice" => "(s, i, j) => { const c = [...s]; const [a, b] = $slice_bounds(c.length, i, j); return c.slice(a, b).join(\"\"); }".to_string(),
+            "len" => "(s) => [...s].length".to_string(),
             "contains?" => "(s, t) => s.includes(t)".to_string(),
             "split" => "(s, t) => s.split(t)".to_string(),
             "array" => "(...a) => a".to_string(),
-            "nth" => format!("(arr, i) => (i >= 0 && i < arr.length ? {ok}(arr[i]) : null)"),
+            "nth" => format!(
+                "(arr, i) => {{ const k = Math.trunc(i); return (i >= 0 && k < arr.length) ? {ok}(arr[k]) : null; }}"
+            ),
             "count" => "(arr) => arr.length".to_string(),
-            "slice" => "(arr, i, j) => arr.slice(i, j)".to_string(),
+            "slice" => "(arr, i, j) => { const [a, b] = $slice_bounds(arr.length, i, j); return arr.slice(a, b); }".to_string(),
             "push" => "(arr, x) => [...arr, x]".to_string(),
             "concat" => "(arr, b) => [...arr, ...b]".to_string(),
             "map" => "(arr, f) => arr.map((x) => f(x))".to_string(),
