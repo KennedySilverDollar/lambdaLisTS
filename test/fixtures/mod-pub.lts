@@ -1,8 +1,0 @@
-;; M6 テスト用モジュール: pub のみ export、hidden と型 T は未 export
-(type T number)
-
-(export pub)
-
-(defn pub () : number 1)
-
-(defn hidden () : number 2)

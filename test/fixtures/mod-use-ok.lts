@@ -1,4 +1,0 @@
-;; export された値 pub を import → 診断ゼロ
-(import "./mod-pub.lts" (pub))
-
-(defn f () : number (pub))
