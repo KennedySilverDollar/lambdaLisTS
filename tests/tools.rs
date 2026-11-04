@@ -314,3 +314,35 @@ fn repl_without_host_has_no_host_binding() {
         "{stdout}"
     );
 }
+
+#[test]
+fn repl_defn_bang_example_runs_with_explicit_host_literal() {
+    // M21: --host なしでも、example が host リテラルを defn! 第1引数に明示渡しすれば
+    // eval/test で defn! の example が動く（host-log は none/空）
+    let input = concat!(
+        r#"{"id": 1, "op": "eval", "src": "(effect log : (fn (s : string) : nil))\n(defn! f (host : (obj (log : (fn (s : string) : nil)))) (s : string) : nil (log! s))\n(example (f (obj (log (fn (s : string) : nil nil))) \"hi\") => nil)"}"#, "\n",
+        r#"{"id": 2, "op": "test"}"#, "\n",
+        r#"{"id": 3, "op": "host-log"}"#, "\n",
+        r#"{"id": 4, "op": "quit"}"#, "\n",
+    );
+    let out = run_lists(&["repl"], Some(input));
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let responses: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("1行1JSON"))
+        .collect();
+    assert_eq!(responses.len(), 3, "quit は応答しない: {stdout}");
+    assert_eq!(responses[0]["ok"], true, "eval: {responses:?}");
+    assert_eq!(
+        responses[1],
+        serde_json::json!({"id": 2, "ok": true, "results": [{"example": "example 0", "pass": true}]}),
+        "defn! の example が test で通る: {responses:?}"
+    );
+    assert_eq!(
+        responses[2],
+        serde_json::json!({"id": 3, "ok": true, "host": "none", "calls": []}),
+        "host 未注入なら記録なし: {responses:?}"
+    );
+}

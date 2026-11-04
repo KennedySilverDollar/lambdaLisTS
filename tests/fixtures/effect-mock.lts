@@ -1,0 +1,16 @@
+;; M21: モック host の呼び出し記録の interp/JS 一致検証用。
+;; example を持たず export のみ（JS 側はテストが driver を書いてモック host を注入して呼ぶ）。
+(effect log : (fn (s : string) : nil))
+(effect db  : (fn (op : string) (key : string) : (Option string)))
+
+(export run)
+
+(defn! run (host : (obj (log : (fn (s : string) : nil))
+                        (db  : (fn (op : string) (key : string) : (Option string)))))
+           (x : number) : (Result number string)
+  (do
+    (log! (str-concat "run:" (str x)))
+    [v (db! "get" (str x))]
+    (match v
+      [nil (ok x)]
+      [s (ok (+ x 1))])))

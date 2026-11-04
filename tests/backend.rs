@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use lists::check::{check_file, ModuleCache};
+use lists::desugar::desugar_expr;
+use lists::eval::{eval_core, global_env, load_defs, Interp};
+use lists::host::{inject_host, MockHost};
+use lists::parser::parse_expr;
 use lists::desugar::{desugar, CoreDef};
 use lists::diagnostic::Diagnostic;
 use lists::emit::{emit, EmitInput, EmitOutput};
@@ -441,4 +445,97 @@ fn stdlib_edge_emit_is_deterministic_and_uses_local_helpers() {
     assert!(r1.js.contains("const $stdlib_str = (a) => $print(a);"), "{}", r1.js);
     assert!(r1.js.contains("const $stdlib_len = (s) => [...s].length;"), "{}", r1.js);
     assert!(!r1.js.contains("$stdlib_split"), "{}", r1.js);
+}
+
+#[test]
+fn effect_run_js_golden_and_source_map_kept() {
+    let out = emit_fixture("effect-run").expect("emit effect-run");
+    let again = emit_fixture("effect-run").expect("emit again");
+    assert_eq!(out.js, again.js, "defn! を含む生成 JS も決定的であること");
+    let map_json: serde_json::Value = serde_json::from_str(&out.map).expect("map json");
+    assert_eq!(map_json["version"], 3);
+    assert_eq!(map_json["sources"], serde_json::json!(["effect-run.lts"]));
+    assert!(!map_json["mappings"].as_str().expect("mappings").is_empty());
+    assert!(out.js.contains("await host.log("), "{}", out.js);
+    assert_golden("effect-run.js", &out.js);
+    assert_golden("effect-run.js.map", &out.map);
+}
+
+#[test]
+fn mock_host_call_log_diff_interp_vs_node() {
+    // M21: モック host の呼び出し記録が interp と JS（node）で一致することを検証する。
+    // JS 側は driver がモック host を注入して run を呼び、記録を印字する。
+    let out = emit_fixture("effect-mock").expect("emit effect-mock");
+    let dir = temp_dir("effect-mock");
+    write_out(&dir, "effect-mock", &out);
+    let driver = r#"import { run } from "./effect-mock.js";
+const calls = [];
+const host = {
+  log: async (s) => { calls.push(["log", s]); return null; },
+  db: async (op, key) => { calls.push(["db", op, key]); return null; },
+};
+const r = await run(host, 1);
+console.log("result " + JSON.stringify(r));
+console.log("calls " + JSON.stringify(calls));
+"#;
+    std::fs::write(dir.join("run-mock.js"), driver).expect("write driver");
+    let run1 = run_node(&dir, &["run-mock.js"]);
+    let run2 = run_node(&dir, &["run-mock.js"]);
+    let stdout = String::from_utf8_lossy(&run1.stdout).into_owned();
+    assert_eq!(run1.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&run1.stderr));
+    assert_eq!(stdout, String::from_utf8_lossy(&run2.stdout).into_owned(), "JS 側も決定的");
+    let result_line = stdout.lines().find(|l| l.starts_with("result ")).expect("result line");
+    let calls_line = stdout.lines().find(|l| l.starts_with("calls ")).expect("calls line");
+    let js_result: serde_json::Value = serde_json::from_str(result_line.strip_prefix("result ").expect("p")).expect("json");
+    let js_calls: serde_json::Value = serde_json::from_str(calls_line.strip_prefix("calls ").expect("p")).expect("json");
+
+    // interp 側: 同じ fixture をモック host（host.rs）で実行し、結果と記録を比較する
+    let abs = fixture_path("effect-mock.lts");
+    let (defs, diags) = pipeline(&abs);
+    assert!(diags.is_empty(), "{diags:?}");
+    let mut cache = ModuleCache::default();
+    let checked = check_file(&abs, &mut cache);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let mock = MockHost::from_effects(&checked.effects, &checked.type_aliases);
+    let env = global_env();
+    load_defs(&defs, &env);
+    inject_host(&env, "host", &mock.obj());
+    let (expr, ediags) = parse_expr("(run host 1)", "t.lts");
+    assert!(ediags.is_empty(), "{ediags:?}");
+    let core = desugar_expr(&expr.expect("expr"));
+    let mut interp = Interp::new();
+    let result = eval_core(&mut interp, &core, &env).expect("interp eval");
+    let interp_result = lists::backends::value_to_json(&result);
+    let interp_calls = serde_json::Value::Array(
+        mock.calls()
+            .iter()
+            .map(|c| {
+                let mut a = vec![serde_json::Value::String(c.effect.to_string())];
+                a.extend(c.args.iter().map(lists::backends::value_to_json));
+                serde_json::Value::Array(a)
+            })
+            .collect(),
+    );
+    fn json_eq_numbers_as_f64(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+        match (a, b) {
+            (serde_json::Value::Number(x), serde_json::Value::Number(y)) => {
+                x.as_f64() == y.as_f64()
+            }
+            (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+                x.len() == y.len()
+                    && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| json_eq_numbers_as_f64(v, w)))
+            }
+            (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y.iter()).all(|(u, v)| json_eq_numbers_as_f64(u, v))
+            }
+            _ => a == b,
+        }
+    }
+    assert!(json_eq_numbers_as_f64(&interp_result, &js_result), "結果が一致: interp vs node: {interp_result} vs {js_result}");
+    assert_eq!(interp_calls, js_calls, "モック host の呼び出し記録が一致: interp vs node");
+    assert_eq!(
+        js_calls,
+        serde_json::json!([["log", "run:1"], ["db", "get", "1"]]),
+        "記録内容の確認: {js_calls}"
+    );
 }

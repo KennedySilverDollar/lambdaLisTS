@@ -1,0 +1,30 @@
+;; do-io (P1, SPEC §3.5): 名前なし do 束縛 `(do e1 e2 ...)` — エフェクトの連続実行。
+;; 名前なし要素は `_` 束縛に糖衣され、§7.4 rule 5（Result 要件、defn! 内の EffectCall は免除）を引き継ぐ。
+(effect log : (fn (s : string) : nil))
+
+(type Host (obj (log : (fn (s : string) : nil))))
+
+(export run use)
+
+(defn! run (host : Host) (x : number) : (Result number nil)
+  (do
+    (log! "start")
+    (log! (str x))
+    (ok x)))
+
+(defn! fail (host : Host) : (Result number string)
+  (do
+    (log! "about-to-fail")
+    (err "boom")))
+
+;; 名前なしの impure 呼び出し（Result を返す defn!）も書ける。Err なら早期 return。
+(defn! use (host : Host) (x : number) : (Result number string)
+  (do
+    (fail host)
+    (ok x)))
+
+(example (run (obj (log (fn (s : string) : nil nil))) 42)
+  => (ok 42))
+
+(example (use (obj (log (fn (s : string) : nil nil))) 1)
+  => (err "boom"))

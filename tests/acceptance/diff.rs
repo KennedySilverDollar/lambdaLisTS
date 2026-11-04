@@ -63,3 +63,11 @@ fn option_raw_and_split_diff_interp_vs_backend() {
         "option-find.lts",
     );
 }
+
+// M21 do-io (SPEC §3.5): 名前なし do 束縛 `(do e1 e2 ...)`。エフェクト連続実行と
+// Result を返す impure 呼び出しの早期 return を interp/backend 両方で検証する。
+#[test]
+fn do_io_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["do-io.lts"], "do-io.lts");
+}

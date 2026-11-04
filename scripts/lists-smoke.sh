@@ -132,5 +132,17 @@ fi
 [ "$code" -eq 0 ] && [ "$n_ok" -eq 70 ]
 check 20 "stdlib-edge.lts: 70/70 examples ok in node" $? "compile code=$code ok=$n_ok"
 
-echo "SMOKE: $pass/20"
+# S21: defn! がモック host で動き、呼び出しが host-log に記録される（M21, host DI）
+printf '%s\n' \
+  '{"id":1,"op":"eval","src":"(effect log : (fn (s : string) : nil))\n(defn! f (host : (obj (log : (fn (s : string) : nil)))) (s : string) : nil (log! s))"}' \
+  '{"id":2,"op":"eval","src":"(example (f host \"smoke\") => nil)"}' \
+  '{"id":3,"op":"test"}' \
+  '{"id":4,"op":"host-log"}' \
+  '{"id":5,"op":"quit"}' | $BIN repl --host mock > "$TMP/s21.txt" 2>&1; code=$?
+n_pass=$(grep -c '"pass":true' "$TMP/s21.txt" || true)
+n_rec=$(grep -c '"effect":"log"' "$TMP/s21.txt" || true)
+[ "$code" -eq 0 ] && [ "$n_pass" -ge 1 ] && [ "$n_rec" -ge 1 ]
+check 21 "repl --host mock: defn! example pass + host-log に呼び出し記録" $? "code=$code pass=$n_pass rec=$n_rec out=$(head -c 200 "$TMP/s21.txt")"
+
+echo "SMOKE: $pass/$((pass+fail))"
 [ "$fail" -eq 0 ]

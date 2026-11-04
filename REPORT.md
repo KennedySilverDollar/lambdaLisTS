@@ -199,3 +199,36 @@ M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実
 - **テスト**: host.rs 単体 4本（host_type、default_value の決定性、モックの記録＋固定応答＋反復決定性、fn 戻りのスキップ）、tools.rs に REPL 経由の注入確認 3本（`--host mock` で example がモック host 経由で通り host-log に記録される、未知 `--host` は exit 2、既定では host なし）。
 - **検証**: `cargo test` 213全パス、`LISTS_BACKEND=mock` acceptance 12/12、スモーク 20/20、warning 0。SPEC.md・ゴールデン無変更（REPL の既存 op・ゴールデンは不変、host-log は追記のみ）。
 - **M21 への引き継ぎ**: design/host-di.md §6（JS 側モック host とログ差分テスト、`lists run` への host 注入、fuel 系エフェクト追加時の拡張確認、`host` 命名衝突の明文化）。
+
+---
+
+## 13. M21: SPEC §7/§14 の P1 スコープ（effect 実行・defn!・do-io）を host DI 上に実装
+
+### §7/§14 P1 スコープの確定（精査結果）
+- §14 の P1 行「defn! 完全実装、effect、do-io、decimal、prop 検証、host DI、モック host」のうち、本マイルストーンで対象なのは **effect 実行 / defn! 完全実装 / do-io / host DI・モック host**。decimal と prop 検証（反復生成・縮小、M22 の自前乱数）は別マイルストーンで対象外。
+- 範囲外（既定どおり）: 高階エフェクト多相（§7.5「高階エフェクト多相は実装しない」）、P2 の condition system 以降。
+- エフェクト検査（effect-violation / unknown-effect）は P0 実装のまま無変更（§7.4 の規則は不変）。本マイルストーンで変えたのは実行系のみ。
+
+### 実装
+- **do-io（§3.5 の `(do e1 e2 ...)` 名なし束縛）**: `src/parser.rs` で do の非終端要素のうち `[...]` でないもの（`(...)` や原子）を名前なし束縛として `_` に糖衣する。束縛は文法どおり `[...]` のみとし、ListRaw に `bracket` フラグを追加して区別（従来は `(name expr)` も偶然束縛と解釈されていた。do-io 以降 `(f x)` は式）。desugar/check/eval/emit は既存の `_` 束縛をそのまま使うので、§7.4 rule 5（Result 要件。defn! 内の EffectCall は免除）が名なし束縛にもそのまま適用される。
+- **effect 実行 / defn!**: M19 で実装済み（interp は host obj 経由、JS は `async function` + `await host.<name>(args)`、source map は map_at で維持）。本マイルストーンでは M20 の host DI 上で動くことを検証。
+- **モック host の呼び出し記録の一致（差分）**: `tests/fixtures/effect-mock.lts`（export のみ）を JS 側は driver（モック host を注入して `await run(host, 1)`、結果と記録を印字）で node 実行、interp 側は `MockHost` を `host` に注入して `(run host 1)` を eval。結果 JSON と呼び出し記録 JSON が一致することを検証（`tests/backend.rs::mock_host_call_log_diff_interp_vs_node`。JS は 2 回実行して決定性も確認）。
+- **REPL**: `--host` なしでも example が host リテラルを defn! 第1引数に渡せば eval/test で動くことを確認（`tests/tools.rs::repl_defn_bang_example_runs_with_explicit_host_literal`）。`--host mock` 経由は M20 のテストで確認済み。
+- **ゴールデン追記**: `tests/golden/effect-run.js` / `effect-run.js.map` を新規追加（UPDATE_SNAPSHOTS で生成。既存ゴールデンは無変更）。source map の sources/mappings が維持されることもテストで確認。
+- **スモーク追記**: S21「`repl --host mock` で defn! の example が pass し、host-log に呼び出しが記録される」を追加。合計は動的に `SMOKE: <pass>/<全件数>` で表示（S1–S20 は不変）。
+
+### テスト追加
+- parser: do-io の糖衣（`_` 束縛化）単体テスト
+- fixtures: `do-io.lts`（エフェクト連続＋impure 早期 return の example）→ `diff::do_io_diff_interp_vs_backend`
+- `effect-mock.lts` → モック host 記録一致テスト（backend.rs）
+- backend.rs: effect-run の JS/マップ golden + source map 検証、モック host diff
+- tools.rs: REPL で defn! example 実行（host リテラル明示渡し）
+
+### 検証
+- `cargo test` 218全パス、`LISTS_BACKEND=mock` acceptance 13/13、スモーク **21/21**（S21 追記。S1–S20 は従来どおり PASS）、warning 0。
+- SPEC.md は本マイルストーンでは無変更（§3.5 の do-io 文言は既存の P1 宣言どおりに実装したため追記不要）。
+
+### 残課題（差分提案）
+1. do-io の名前なし束縛が §7.4 rule 5 の Result 要件を引き継ぐことの明文化（現状: `_` 束縛と同一に適用。defn! 内の EffectCall のみ免除。`(do (impure-non-result host) ...)` は type-mismatch）。
+2. do の束縛が `[...]` のみであることの明文化（パーサは P0 で `(name expr)` も受理していたが、do-io との曖昧さ解消のため `[...]` のみを束縛とみなす実装に変更）。
+3. JS 側モック host（`host.mock.js` 形状、design/host-di.md §5）の実装は次マイルストーンへ（今回は driver 注入で記録一致を検証）。
