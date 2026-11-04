@@ -222,6 +222,7 @@ fn diagnostics_contain_no_js_engine_text() {
         "mod-missing.lts",
         "tail-self.lts",
         "tail-mutual.lts",
+        "stdlib-edge.lts",
     ] {
         let abs = fixture_path(name);
         let src = std::fs::read_to_string(&abs).expect("read fixture");

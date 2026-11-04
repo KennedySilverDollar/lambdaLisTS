@@ -20,7 +20,7 @@ cargo build --release  # リリースビルド → target/release/lists
 ## テスト
 
 ```sh
-cargo test   # 全176件（単体 142 + tests/ の統合 34）。すべて成功するのが正常です
+cargo test   # 全183件（単体 146 + tests/ の統合 37）。すべて成功するのが正常です
 ```
 
 テストの構成（GUIDE.md §7）:
@@ -218,7 +218,7 @@ analysis/       v0.3-pre-audit.md（v0.3 事前監査）
 
 ## 受け入れテスト（SPEC.md §13）
 
-`cargo test` に T1〜T11 が含まれます（全176件）:
+`cargo test` に T1〜T11 が含まれます（全183件）:
 
 | テスト | 内容 | 状態 |
 |---|---|---|

@@ -98,7 +98,9 @@ impl Interp {
             BuiltinKind::Gt => Ok(Value::Bool(num(&args[0])? > num(&args[1])?)),
             BuiltinKind::Le => Ok(Value::Bool(num(&args[0])? <= num(&args[1])?)),
             BuiltinKind::Ge => Ok(Value::Bool(num(&args[0])? >= num(&args[1])?)),
-            BuiltinKind::Eq => Ok(Value::Bool(structural_equal(&args[0], &args[1]))),
+            BuiltinKind::Eq => Ok(Value::Bool(
+                structural_equal(&args[0], &args[1]).map_err(|e| EvalError::Runtime(e.to_string()))?,
+            )),
             BuiltinKind::Mod => Ok(Value::Num(num(&args[0])? % num(&args[1])?)),
             BuiltinKind::Abs => Ok(Value::Num(num(&args[0])?.abs())),
             BuiltinKind::Min => Ok(Value::Num(num(&args[0])?.min(num(&args[1])?))),
@@ -437,7 +439,7 @@ fn match_value(p: &Pat, v: &Value, binds: &mut BTreeMap<Rc<str>, Value>) -> bool
             binds.insert(name.clone(), v.clone());
             true
         }
-        PatKind::Lit(lit) => structural_equal(lit, v),
+        PatKind::Lit(lit) => matches!(structural_equal(lit, v), Ok(true)),
         PatKind::Or(ps) => {
             for sub in ps {
                 let mut sub_binds = BTreeMap::new();
@@ -575,7 +577,8 @@ pub fn run_examples(
         {
             let a = eval_core(interp, actual, env)?;
             let e = eval_core(interp, expected, env)?;
-            let pass = structural_equal(&a, &e);
+            let pass =
+                structural_equal(&a, &e).map_err(|e| EvalError::Runtime(e.to_string()))?;
             results.push(ExampleResult {
                 index,
                 pass,
@@ -663,7 +666,8 @@ mod tests {
         assert!(structural_equal(
             &results[0].actual,
             &Value::Ok(Box::new(money(3.0, "JPY")))
-        ));
+        )
+        .expect("eq"));
     }
 
     #[test]
@@ -676,7 +680,8 @@ mod tests {
         assert!(structural_equal(
             &results[0].actual,
             &Value::Err(Box::new(obj(vec![("tag", Value::Str(Rc::from("EmptyCart")))])))
-        ));
+        )
+        .expect("eq"));
     }
 
     #[test]

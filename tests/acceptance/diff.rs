@@ -33,3 +33,11 @@ fn t11_diff_via_mock_backend() {
     assert_diff(&*backend, &["money.lts"], "money.lts");
     assert_diff(&*backend, &["money.lts", "cart.lts"], "cart.lts");
 }
+
+// M16（v0.3 事前確定 #4）: SPEC §11.6 の規範的意味論（stdlib 5件 + 印字規約）の差分テスト。
+// T7/T10 の対象ケースは不変のまま、追記のみ。
+#[test]
+fn stdlib_edge_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["stdlib-edge.lts"], "stdlib-edge.lts");
+}
