@@ -1,0 +1,25 @@
+;; M16採用済み判断の実行時検証:
+;; (a) (union T nil) は実行時に生値として表現される（Ok/Err で包まない。nil は Nil）
+;; (b) split("") は各 Unicode スカラ値文字を1要素とし、空文字列要素を含まない
+;; いずれも `=> <生値>` で観測する（Ok 包みなら不一致で失敗する）
+
+;; nth: 成功は生値、範囲外・NaN は nil
+(example (nth (array 10 20 30) 1) => 20)
+(example (nth (array 10 20 30) 1.9) => 20)
+(example (nth (array 10 20 30) 9) => nil)
+(example (nth (array 10 20 30) (/ 0 0)) => nil)
+
+;; find: 成功は生値、不発は nil
+(example (find (array 1 2 3) (fn (x : number) : bool (> x 1))) => 2)
+(example (find (array 1 2 3) (fn (x : number) : bool (> x 99))) => nil)
+(example (find (array) (fn (x : number) : bool true)) => nil)
+
+;; split: 空区切りはスカラ値単位・空要素なし。空文字列・1文字・絵文字を含む
+(example (split "" "") => (array))
+(example (split "abc" "") => (array "a" "b" "c"))
+(example (split "x" "") => (array "x"))
+(example (split "a😀b" "") => (array "a" "😀" "b"))
+(example (count (split "a😀b" "")) => 3)
+;; 非空区切りは従来どおり
+(example (split "a,b,c" ",") => (array "a" "b" "c"))
+(example (split "abc" "") => (split "abc" ""))

@@ -160,3 +160,27 @@ M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実
 3. example/top-level での EffectCall 禁止を明文化する文言（現状は実装が `effect-violation` を出すのみ）。
 4. host の型が obj でない（型変数・別名など）場合にハンドラ検査をスキップする扱いの明文化。
 5. async モジュールの example は top-level await に依存すること（ESM 前提。export/import を一切含まない純粋 async モジュールでは Node のモジュール構文検出に依存）。
+
+---
+
+## 11. M16 残課題の採用済み判断 (a)(b) の実装
+
+背景: §8 の残課題「nth/find の Ok 包み vs (union T nil)」「split("") の空要素」。ユーザー確定の採用済み判断を SPEC 反映＋実装した。
+
+- **(a) `(union T nil)` の実行時表現は生値 T（Ok/Err で包まない。nil は Nil）。MUST。**
+  - SPEC: §11.6 に「(union T nil)（Option T）の実行時表現」bullet を追記し、`nth` bullet の `ok(arr[trunc(i)])` を `arr[trunc(i)]`（生値）へ修正。§0.3 変更点リストに row 4 として記録。
+  - interp (`src/eval.rs`): `nth` 成功時に `Value::Ok` で包んでいたのを生値 `arr[i]` に変更。`find` も同様に生値 `x` へ変更（失敗は従来どおり `Value::Nil`）。
+  - JS (`src/emit.rs`): 従来も `{ok}(arr[k])` / `{ok}(x)` で包んでいた（ユーザー想定「JS側は生値のはず」は未確認だったが実際は包んでいた）ため、差分テストで確認のうえ `arr[k]` / `x`（失敗 `null`）へ変更。結果として **tests/golden/cart.js の `$stdlib_find` 1行のみ**が `ok(x)` → `x` に変わった（UPDATE_SNAPSHOTS で再生成。他のゴールデンは無変更。money.js は find/nth/split を使わないため不変）。
+  - 型（`src/stdlib.rs`）は従来から `(Option T)` = `(union T nil)` だったため、検査側の変更は不要。
+- **(b) `split("")` は各 Unicode スカラ値文字を1要素とし、空文字列要素を含まない。MUST。**
+  - SPEC: §11.6 に `split` bullet を追記（例: `split("a😀b","")` = `["a" "😀" "b"]`、`split("","")` = `[]`）。§0.3 に row 5 として記録。
+  - interp: Rust の `str::split("")` は空要素を含むため不使用。空区切りのときのみ `chars()` 単位の分割に切り替え（非空区切りは従来どおり `split(t)`）。
+  - JS: `s.split("")` は UTF-16 コード単位に分割されてしまう（絵文字が2要素になる）ため、空区切りのみ `[...s]`（コードポイント単位）に切り替え: `(s, t) => t === "" ? [...s] : s.split(t)`。非空区切りは不変。
+- **テスト（追記のみ）**:
+  - 新規 fixture `tests/fixtures/option-raw.lts`: nth の生値観測（`=> 20`。Ok 包みなら不一致で失敗）、範囲外・NaN は nil、find 成功/不発、split("") の空文字列・1文字・絵文字・非空区切りの example。
+  - 新規 fixture `tests/fixtures/option-find.lts`: cart.lts の find 成功アーム（NegativeQty）を実行時に通す（place-order に qty=-1 の item を渡す）＋空カートの不発アーム。
+  - `tests/acceptance/diff.rs` に `option_raw_and_split_diff_interp_vs_backend` を追記（interp vs js/mock で構造的一致）。
+  - 単体: eval.rs に nth/find/split の生値・スカラ値単体テスト 3本、emit.rs に lowering 文のテスト 1本。
+  - stdlib-edge.lts はスモーク S20 が件数 70 固定のため無変更（新規 example は新規 fixture 側に集約）。
+- **検証**: `cargo test` 206全パス（+5）、`LISTS_BACKEND=mock` acceptance 12/12、スモーク 20/20、warning 0。CLI compile+node で option-find.lts は example 2/2 ok（NegativeQty アームが生値で通ることを確認）。
+- **残課題**: なし（(a)(b) とも SPEC 反映済み。旧「Ok 包み」実装は跡形もなく除去済み）。

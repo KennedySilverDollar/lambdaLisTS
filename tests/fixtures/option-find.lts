@@ -1,0 +1,11 @@
+;; M16採用済み判断(a)の end-to-end: cart.lts > check-items の find 成功アームが
+;; 実行時に通ること（find は生値 T を返すので match の [i ...] に生の item が束縛され i.id が取れる）
+(import "./money.lts" (Money zero))
+(import "./cart.lts" (place-order))
+
+(example (place-order (array (obj (id "neg") (price (zero)) (qty -1))))
+  => (err (obj (tag "NegativeQty") (id "neg"))))
+
+;; find 不発アーム（空カート）も従来どおり
+(example (place-order (array))
+  => (err (obj (tag "EmptyCart"))))

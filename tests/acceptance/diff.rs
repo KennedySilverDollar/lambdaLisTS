@@ -49,3 +49,17 @@ fn effect_run_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["effect-run.lts"], "effect-run.lts");
 }
+
+// M16 採用済み判断: (a) (union T nil) は実行時に生値（find/nth は成功で生値 T、失敗で nil）、
+// (b) split("") は Unicode スカラ値単位で空要素なし。example の `=> <生値>` で観測する。
+// option-find.lts は cart.lts の find 成功アーム（NegativeQty）を実行時に通す。
+#[test]
+fn option_raw_and_split_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["option-raw.lts"], "option-raw.lts");
+    assert_diff(
+        &*backend,
+        &["money.lts", "cart.lts", "option-find.lts"],
+        "option-find.lts",
+    );
+}

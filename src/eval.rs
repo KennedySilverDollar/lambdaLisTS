@@ -122,18 +122,24 @@ impl Interp {
             BuiltinKind::Len => Ok(Value::Num(str_v(&args[0])?.chars().count() as f64)),
             BuiltinKind::Contains => Ok(Value::Bool(str_v(&args[0])?.contains(&*str_v(&args[1])?))),
             BuiltinKind::Split => {
-                let parts: Vec<Value> = str_v(&args[0])?
-                    .split(str_v(&args[1])?.as_ref())
-                    .map(|p| Value::Str(Rc::from(p)))
-                    .collect();
+                let s = str_v(&args[0])?;
+                let t = str_v(&args[1])?;
+                // §11.6: 区切りが空文字列のときは各 Unicode スカラ値文字を1要素とし、
+                // 空文字列要素を生じない（Rust の str::split("") とは異なるので使わない）。
+                let parts: Vec<Value> = if t.is_empty() {
+                    s.chars().map(|c| Value::Str(Rc::from(c.to_string()))).collect()
+                } else {
+                    s.split(t.as_ref()).map(|p| Value::Str(Rc::from(p))).collect()
+                };
                 Ok(Value::Array(parts))
             }
             BuiltinKind::Array => Ok(Value::Array(args)),
             BuiltinKind::Nth => {
                 let arr = arr_v(&args[0])?;
                 let i = num(&args[1])?;
+                // §11.6: (union T nil) は実行時に生値。成功は arr[trunc(i)]、失敗は nil。
                 if i >= 0.0 && (i as usize) < arr.len() {
-                    Ok(ok_v(arr[i as usize].clone()))
+                    Ok(arr[i as usize].clone())
                 } else {
                     Ok(Value::Nil)
                 }
@@ -188,7 +194,8 @@ impl Interp {
                 let f = args[1].clone();
                 for x in arr {
                     if bool_v(&self.apply(f.clone(), vec![x.clone()])?)? {
-                        return Ok(ok_v(x));
+                        // §11.6: 成功は生値 x、失敗は nil（Ok で包まない）。
+                        return Ok(x);
                     }
                 }
                 Ok(Value::Nil)
@@ -885,5 +892,50 @@ mod tests {
         assert_eq!(r, Value::Bool(true));
         let r = call_src(src, "od", vec![Value::Num(1_000_001.0)]).expect("ok");
         assert_eq!(r, Value::Bool(true));
+    }
+
+    fn builtin_call(name: &str, args: Vec<Value>) -> Result<Value, EvalError> {
+        let env = global_env();
+        let f = env.lookup(name).expect("builtin");
+        let mut interp = Interp::new();
+        interp.apply(f, args)
+    }
+
+    #[test]
+    fn nth_returns_raw_value_not_ok_wrapped() {
+        let arr = Value::Array(vec![Value::Num(10.0), Value::Num(20.0), Value::Num(30.0)]);
+        let hit = builtin_call("nth", vec![arr.clone(), Value::Num(1.0)]).expect("ok");
+        assert_eq!(hit, Value::Num(20.0), "生値であること（§11.6: Ok で包まない）");
+        let miss = builtin_call("nth", vec![arr, Value::Num(9.0)]).expect("ok");
+        assert_eq!(miss, Value::Nil);
+    }
+
+    #[test]
+    fn find_returns_raw_value_or_nil() {
+        let src = "(defn f (arr : (Array number)) : (Option number) (find arr (fn (x : number) : bool (> x 1))))";
+        let hit = call_src(src, "f", vec![Value::Array(vec![Value::Num(1.0), Value::Num(2.0), Value::Num(3.0)])]).expect("ok");
+        assert_eq!(hit, Value::Num(2.0), "生値であること（§11.6）");
+        let miss = call_src(src, "f", vec![Value::Array(vec![Value::Num(1.0)])]).expect("ok");
+        assert_eq!(miss, Value::Nil);
+    }
+
+    #[test]
+    fn split_empty_separator_splits_into_scalar_values_without_empty_parts() {
+        let r = builtin_call("split", vec![Value::Str(Rc::from("a\u{1f600}b")), Value::Str(Rc::from(""))]).expect("ok");
+        assert_eq!(
+            r,
+            Value::Array(vec![
+                Value::Str(Rc::from("a")),
+                Value::Str(Rc::from("\u{1f600}")),
+                Value::Str(Rc::from("b"))
+            ]),
+            "絵文字は1要素・空要素なし（§11.6）"
+        );
+        let r = builtin_call("split", vec![Value::Str(Rc::from("abc")), Value::Str(Rc::from(""))]).expect("ok");
+        assert_eq!(r, Value::Array(vec![Value::Str(Rc::from("a")), Value::Str(Rc::from("b")), Value::Str(Rc::from("c"))]));
+        let r = builtin_call("split", vec![Value::Str(Rc::from("")), Value::Str(Rc::from(""))]).expect("ok");
+        assert_eq!(r, Value::Array(vec![]));
+        let r = builtin_call("split", vec![Value::Str(Rc::from("a,b,c")), Value::Str(Rc::from(","))]).expect("ok");
+        assert_eq!(r, Value::Array(vec![Value::Str(Rc::from("a")), Value::Str(Rc::from("b")), Value::Str(Rc::from("c"))]));
     }
 }

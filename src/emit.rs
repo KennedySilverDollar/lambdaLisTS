@@ -596,7 +596,6 @@ impl<'a> Gen<'a> {
     }
 
     fn stdlib_impl(&self, name: &str) -> String {
-        let ok = self.runtime_ref("ok");
         let se = self.runtime_ref("structuralEqual");
         match name {
             "+" => "(a, b) => a + b".to_string(),
@@ -618,10 +617,12 @@ impl<'a> Gen<'a> {
             "str-slice" => "(s, i, j) => { const c = [...s]; const [a, b] = $slice_bounds(c.length, i, j); return c.slice(a, b).join(\"\"); }".to_string(),
             "len" => "(s) => [...s].length".to_string(),
             "contains?" => "(s, t) => s.includes(t)".to_string(),
-            "split" => "(s, t) => s.split(t)".to_string(),
+            // §11.6: 空区切りは各 Unicode スカラ値文字を1要素とし空要素を生まない（[...s] はコードポイント単位）
+            "split" => "(s, t) => t === \"\" ? [...s] : s.split(t)".to_string(),
             "array" => "(...a) => a".to_string(),
+            // §11.6: (union T nil) は実行時に生値。成功は arr[trunc(i)]、失敗は null(=nil)。
             "nth" => format!(
-                "(arr, i) => {{ const k = Math.trunc(i); return (i >= 0 && k < arr.length) ? {ok}(arr[k]) : null; }}"
+                "(arr, i) => {{ const k = Math.trunc(i); return (i >= 0 && k < arr.length) ? arr[k] : null; }}"
             ),
             "count" => "(arr) => arr.length".to_string(),
             "slice" => "(arr, i, j) => { const [a, b] = $slice_bounds(arr.length, i, j); return arr.slice(a, b); }".to_string(),
@@ -630,8 +631,9 @@ impl<'a> Gen<'a> {
             "map" => "(arr, f) => arr.map((x) => f(x))".to_string(),
             "filter" => "(arr, f) => arr.filter((x) => f(x))".to_string(),
             "fold-left" => "(arr, init, f) => arr.reduce((acc, x) => f(acc, x), init)".to_string(),
+            // §11.6: 成功は生値 x、失敗は null(=nil)。
             "find" => format!(
-                "(arr, f) => {{ for (const x of arr) if (f(x)) return {ok}(x); return null; }}"
+                "(arr, f) => {{ for (const x of arr) if (f(x)) return x; return null; }}"
             ),
             "any?" => "(arr, f) => arr.some((x) => f(x))".to_string(),
             "all?" => "(arr, f) => arr.every((x) => f(x))".to_string(),
@@ -1268,5 +1270,17 @@ mod tests {
         let map_json: serde_json::Value = serde_json::from_str(&a.map).expect("map json");
         assert_eq!(map_json["version"], 3);
         assert_eq!(map_json["sources"], serde_json::json!(["test.lts"]));
+    }
+
+    #[test]
+    fn option_and_split_stdlib_lowering_is_raw_and_scalar_based() {
+        let out = emit_src(
+            "(defn f (arr : (Array number)) : (Option number) (find arr (fn (x : number) : bool (> x 0))))\n(defn g (arr : (Array number)) (i : number) : (Option number) (nth arr i))\n(defn h (s : string) (t : string) : (Array string) (split s t))",
+        )
+        .expect("emit");
+        assert!(out.js.contains("? arr[k] : null"), "{}", out.js);
+        assert!(!out.js.contains("{ok}(arr[k])"), "{}", out.js);
+        assert!(out.js.contains("if (f(x)) return x; return null;"), "{}", out.js);
+        assert!(out.js.contains("t === \"\" ? [...s] : s.split(t)"), "{}", out.js);
     }
 }
