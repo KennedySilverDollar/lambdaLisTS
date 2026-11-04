@@ -93,3 +93,20 @@
 - pre-audit 作業1の (C)（非末尾再帰の深さ上限超過を internal-error から runtime error にするか）は未採用のまま。§8.5/§8.6 は現行どおり（Rust interp は internal-error）。
 - `nth`/`find` は実行時に `Ok` で包んだ値を返す一方、型は `(union T nil)` であり、cart.lts の find 成功アーム（`i.id`）は現行実行時に失敗し得る。Option の実行時表現（raw T か Ok 包みか）の規範化は別途差分提案が必要（本範囲外のため未変更・観測のみ）。
 - P1 ロードマップ（defn! 完全実装、prop 検査、host DI 等）は §14 のまま。
+
+---
+
+## 8. M16 採用(4)詳細: stdlib 5件＋印字規約の interp/JS 食い違い修正（規範 = §8.6・§11.6・付録C・Rust実装）
+
+M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実装）に合わせて JS 側（`src/emit.rs` の `$stdlib_*` とローカル補助関数）を修正した。仕様文言が曖昧だった箇所は §11.6 を明確化し（採用(4)の委任範囲）、§0.3 の変更点リストにも追記済み。runtime.js の export は ok/err/structuralEqual の3つのまま（§12.5 MUST）。
+
+| 項目 | 採用規範（文言の所在） | Rust 実装の適合確認 | JS 側の修正 | 差分テスト追加 |
+|---|---|---|---|---|
+| 1. min/max の NaN・±0・±Infinity | §11.6（明確化）: 片方 NaN → 他方、両方 NaN → NaN。それ以外は `a<b ? a : b`（max は `a>b ? a : b`）。同値（±0含む）なら第2引数 | `src/eval.rs` の `f64::min`/`f64::max`。±0 同士の比較は LLVM 上規格未規定で debug/release で符号が異なることを実測したため、規範は「同値なら第2引数」と明記し JS も統一 | `Math.min/max`（NaN 伝搬・±0順序が不一致）をやめ、NaN チェック後に `a < b ? a : b` / `a > b ? a : b` の数値専用パスで明示実装 | `stdlib-edge.lts` に NaN・±0（4ケース）・±Infinity の str 観測を追加 |
+| 2. len / str-slice の単位 | §11.6: Unicode スカラ値（char）数。サロゲートペアは 1 | `chars().count()` / `chars().collect()` で適合 | `s.length` → `[...s].length`（コードポイント換算）、str-slice も char 配列経由 + `$slice_bounds` | 絵文字 😀 の len/str-slice 境界（先頭・中間・NaN end）を追加 |
+| 3. str の数値表記 | §11.6/付録C #10: 最短往復10進・指数表記なし、整数値に `.0` 無し、NaN/±Infinity/-0 は専用表記 | `print_value` は Rust `f64` Display（指数表記なし）に適合 | `String(n)` の指数表記（`1e+21` 等）を `$print_num` で展開するローカル補助関数を生成コードに埋め込み | 0, 1.0→"1", 1e15/1e16/1e20/1e22, -1e21, 2^53, 0.5, 1e-6 の境界を追加 |
+| 4. nth の小数添字（＋ slice/str-slice の小数 bounds） | §11.6: `i >= 0 && trunc(i) < len` なら `ok(arr[trunc(i)])`、他は `nil`。slice_bounds の start/end も 0 方向切り捨て。nth は配列のみ（文字列は str-slice） | `i as usize`（0方向切り捨て）と `slice_bounds` の `as usize` で適合 | `Math.trunc` による切り捨て＋`$slice_bounds`（`Math.trunc` 込み） | nth に 0.5/2.99/-0.5、str-slice/slice に小数 bounds（1.9, 4.2 等）を追加 |
+| 5. str の印字規約 | §11.6/付録C #10: 文字列は引用符・エスケープなしで生印字。配列 `[a b c]`、obj はキーを UTF-8 バイト順に `{k: v, ...}`、Result `(ok v)`/`(err v)`、関数 `<fn>`。REPL の結果印字（actual/expected）も同規約。診断は span/kind で示し値を示す場合は同規約 | `src/value.rs` > `print_value` が規範通り。REPL は `print_value` を使用（repl.rs） | 生成コードにローカル `$print`/`$print_num`/`$cmp_str` を埋め込み（キーはコードポイント順ソート） | 文字列の生印字（`"`・改行を含む）、ネスト構造（配列内文字列・obj 内 Result/文字列）を追加 |
+
+- **検証**: `tests/fixtures/stdlib-edge.lts` は example 70件（旧36 + 新規34）すべて interp vs JS backend（`--backend js`）で一致し、期待値とも一致（`diff::stdlib_edge_diff_interp_vs_backend`）。`cargo test` 183件全パス、`LISTS_BACKEND=mock` でも全パス。T1–T11・golden は無変更。
+- **残課題（持ち越し）**: `split("")` の空区切りの食い違い（Rust は `["","a","b","c",""]`、JS は `["a","b","c"]`）は §11.6 の5件の範囲外のため未修正。`str` 印字で JS の `{tag,value}` 形状と2キー obj が区別不能な点は §11.6 に注意として記載済み。
