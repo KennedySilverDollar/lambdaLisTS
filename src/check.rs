@@ -278,6 +278,22 @@ impl<'a> Checker<'a> {
                             self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()]))
                         })
                         .collect();
+                    // P1 (M22): prop は実評価されるので forall パラメータは生成可能な型のみ
+                    for (p, t) in params.iter().zip(ptypes.iter()) {
+                        if !crate::prop::is_generatable(t, &self.aliases) {
+                            self.diag(
+                                DiagKind::TypeMismatch,
+                                span.clone(),
+                                format!(
+                                    "prop の forall パラメータ '{n}' の型 {t:?} は生成できない型です（関数型・型変数は不可）",
+                                    n = p.name
+                                ),
+                                Some(json!({ "path": path })),
+                                None,
+                                Severity::Error,
+                            );
+                        }
+                    }
                     let frame: BTreeMap<Rc<str>, Type> = params
                         .iter()
                         .zip(ptypes.iter())

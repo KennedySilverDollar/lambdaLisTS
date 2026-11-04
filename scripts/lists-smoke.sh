@@ -144,5 +144,21 @@ n_rec=$(grep -c '"effect":"log"' "$TMP/s21.txt" || true)
 [ "$code" -eq 0 ] && [ "$n_pass" -ge 1 ] && [ "$n_rec" -ge 1 ]
 check 21 "repl --host mock: defn! example pass + host-log に呼び出し記録" $? "code=$code pass=$n_pass rec=$n_rec out=$(head -c 200 "$TMP/s21.txt")"
 
+# S22: REPL prop — money.lts の prop がシード付きで 100試行 pass（M22）
+printf '%s\n' \
+  '{"id":1,"op":"reload","file":"tests/fixtures/money.lts"}' \
+  '{"id":2,"op":"prop","name":"add-money commutative","seed":42}' \
+  '{"id":3,"op":"quit"}' | $BIN repl > "$TMP/s22.txt" 2>&1; code=$?
+[ "$code" -eq 0 ] && grep -q '"ok":true' "$TMP/s22.txt" && grep -q '"trials":100' "$TMP/s22.txt" && grep -q '"seed":42' "$TMP/s22.txt"
+check 22 "repl prop: money.lts の prop が seed=42・100試行で pass" $? "code=$code out=$(head -c 200 "$TMP/s22.txt")"
+
+# S23: 偽 prop — 反例・縮小・シードが機械可読 JSON で返る（M22）
+printf '%s\n' \
+  '{"id":1,"op":"eval","src":"(prop \"neg\" (forall [(x : number)] (< x 0)))"}' \
+  '{"id":2,"op":"prop","name":"neg","seed":7}' \
+  '{"id":3,"op":"quit"}' | $BIN repl > "$TMP/s23.txt" 2>&1; code=$?
+[ "$code" -eq 0 ] && grep -q '"ok":false' "$TMP/s23.txt" && grep -q '"counterexample"' "$TMP/s23.txt" && grep -qE '"shrunk":\{"x":0(\.0)?\}' "$TMP/s23.txt" && grep -q '"seed":7' "$TMP/s23.txt"
+check 23 "repl prop: 偽 prop に反例・縮小(x=0)・シードが機械可読で返る" $? "code=$code out=$(head -c 240 "$TMP/s23.txt")"
+
 echo "SMOKE: $pass/$((pass+fail))"
 [ "$fail" -eq 0 ]

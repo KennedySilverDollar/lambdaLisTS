@@ -677,14 +677,14 @@ JSON 直列化は serde_json とする（`Map` はデフォルトでキーソー
 {"id": 2, "ok": true, "results": [{"example": "place-order空カート", "pass": true}]}
 {"id": 2, "ok": false, "failures": [{"example": "...", "actual": "…", "expected": "…"}]}
 {"id": 5, "ok": true, "type": "(fn (number number) : number)"}
-{"id": 3, "ok": false, "errors": [{"kind": "unsupported-in-p0", "message": "prop評価はP1で実装"}]}
+{"id": 3, "ok": false, "errors": [{"kind": "unbound-symbol", "message": "prop が見つかりません: 'add-money commutative'"}]}
 ```
 
 op と意味：
 
 - `eval`：src をパース・検査・評価し、定義名と型を返す。診断がある場合は `ok: false` + `errors`。
 - `test`：ロード済みの全 `example` を評価し、期待値と構造的等価で比較、結果リストを返す。
-- `prop`：P0 では受理するが評価せず unsupported-in-p0 エラーを返す（P1 で反例・縮小を実装）。
+- `prop`: 指定した名前の prop を実評価する（P1）。リクエストに `"seed"`（u64）を含められるほか、CLI に `lists repl --seed <u64>` がある。既定シードはドキュメント化された定数（`DEFAULT_SEED`）で、乱数は自前の決定的 PRNG（splitmix64。外部乱数ライブラリ・システム時刻は使わない）のみを使う。**同じシードなら同じ生成列・同じ反例が得られる（MUST）**。成功時は `{"ok": true, "prop": name, "seed": s, "trials": n}`、失敗時は `{"ok": false, "prop": name, "seed": s, "trials": k, "counterexample": {param: value}, "shrunk": {param: value}, "fix": {...}}` を返す。prop が未定義なら `unbound-symbol` エラー。forall パラメータは生成可能な型（関数型・型変数は不可）でなければならない。
 - `reload`：ファイルを再読込し、依存も再検査する。
 - `type-of`：src の型を正規表示（§6.2）で返す。
 - `quit`：終了。
@@ -892,7 +892,7 @@ const host = {
 - **T6. エフェクト違反（検査のみ）** — 付録B effects.lts の `pure-run` 内 `log!` が effect-violation エラーと `defn!` への fix パッチを返す。
 - **T7. 差分一致** — T1–T6 すべてで、Rust インタープリタと JS バックエンドの出力が構造的に一致。
 - **T8. source map** — JS実行時エラー（深い再帰によるスタックオーバーフロー等）のスタックトレースが .lts の該当行を指す。
-- **T9. REPL JSON** — eval / test / type-of のJSON入出力が仕様通りに動作。prop は unsupported エラーを返す。
+- **T9. REPL JSON** — eval / test / type-of のJSON入出力が仕様通りに動作。prop は unsupported エラーを返す。（追記 M22: P1 では prop op は実評価されます。§10.1 参照）
 
 （v0.1 の「prop の反例と縮小」は P1 受入へ繰延。）
 

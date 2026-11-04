@@ -87,9 +87,10 @@ fn repl_json_lines_golden() {
         responses[1],
         serde_json::json!({"id": 2, "ok": true, "results": []})
     );
+    // M22: prop op は実評価へ移行したので、この時点では prop が未定義のため unbound-symbol
     assert_eq!(
         responses[2]["errors"][0]["kind"],
-        serde_json::json!("unsupported-in-p0")
+        serde_json::json!("unbound-symbol")
     );
     assert_eq!(responses[2]["ok"], serde_json::json!(false));
     assert_eq!(responses[3], serde_json::json!({"id": 4, "ok": true}));
@@ -345,4 +346,76 @@ fn repl_defn_bang_example_runs_with_explicit_host_literal() {
         serde_json::json!({"id": 3, "ok": true, "host": "none", "calls": []}),
         "host 未注入なら記録なし: {responses:?}"
     );
+}
+
+fn repl_responses(out: &std::process::Output) -> Vec<serde_json::Value> {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("1行1JSON"))
+        .collect()
+}
+
+#[test]
+fn repl_prop_money_lts_passes_with_seed() {
+    // M22: money.lts の prop（従来は受理のみ）が実評価で通る
+    let input = concat!(
+        r#"{"id": 1, "op": "reload", "file": "tests/fixtures/money.lts"}"#, "\n",
+        r#"{"id": 2, "op": "prop", "name": "add-money commutative", "seed": 42}"#, "\n",
+        r#"{"id": 3, "op": "quit"}"#, "\n",
+    );
+    let out = run_lists(&["repl", "--seed", "42"], Some(input));
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let rs = repl_responses(&out);
+    assert_eq!(rs[0]["ok"], true, "{rs:?}");
+    assert_eq!(
+        rs[1],
+        serde_json::json!({"id": 2, "ok": true, "prop": "add-money commutative", "seed": 42, "trials": 100}),
+        "prop が 100試行・seed=42 で pass: {rs:?}"
+    );
+}
+
+#[test]
+fn repl_prop_false_prop_reports_counterexample_shrink_seed() {
+    // 偽 prop: 反例・縮小後の値・施行回数・シードが機械可読 JSON で返る
+    let input = concat!(
+        r#"{"id": 1, "op": "eval", "src": "(prop \"neg\" (forall [(x : number)] (< x 0)))"}"#, "\n",
+        r#"{"id": 2, "op": "prop", "name": "neg", "seed": 7}"#, "\n",
+        r#"{"id": 3, "op": "quit"}"#, "\n",
+    );
+    let out = run_lists(&["repl"], Some(input));
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let rs = repl_responses(&out);
+    assert_eq!(rs[0]["ok"], true, "{rs:?}");
+    let p = &rs[1];
+    assert_eq!(p["ok"], false);
+    assert_eq!(p["prop"], "neg");
+    assert_eq!(p["seed"], 7);
+    assert!(p["trials"].as_u64().is_some_and(|t| (1..=100).contains(&t)), "{p}");
+    assert!(p["counterexample"]["x"].is_number(), "反例が機械可読: {p}");
+    assert_eq!(p["shrunk"]["x"], serde_json::json!(0.0), "number は 0 へ縮小: {p}");
+    let tmpl = p["fix"]["template"].as_str().expect("fix template");
+    assert!(tmpl.starts_with("(example (< 0 0)") && tmpl.ends_with("=> false)"), "貼れる example 形状: {tmpl}");
+    // 決定性: 同一シードで同一応答
+    let out2 = run_lists(&["repl"], Some(input));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out2.stdout),
+        "同じシードなら同じ反例・同じ応答（決定性 MUST）"
+    );
+}
+
+#[test]
+fn repl_prop_unknown_name_is_error_and_bad_seed_exits_2() {
+    let input = concat!(
+        r#"{"id": 1, "op": "prop", "name": "nope"}"#, "\n",
+        r#"{"id": 2, "op": "quit"}"#, "\n",
+    );
+    let out = run_lists(&["repl"], Some(input));
+    let rs = repl_responses(&out);
+    assert_eq!(rs[0]["ok"], false);
+    assert_eq!(rs[0]["errors"][0]["kind"], "unbound-symbol");
+    let bad = run_lists(&["repl", "--seed", "notanumber"], None);
+    assert_eq!(bad.status.code(), Some(2), "不正な --seed は exit 2");
 }

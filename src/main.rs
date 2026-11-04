@@ -36,6 +36,9 @@ enum Commands {
         /// 注入する host（none=注入なし、mock=モック host）
         #[arg(long, default_value = "none")]
         host: String,
+        /// prop 評価のシード（既定: ドキュメント化された定数。同じシードで同じ反例）
+        #[arg(long)]
+        seed: Option<u64>,
     },
 }
 
@@ -48,8 +51,8 @@ fn main() -> ExitCode {
             backend,
         } => ExitCode::from(compile(&files, out.as_deref(), &backend) as u8),
         Commands::Fmt { files } => ExitCode::from(fmt_cmd(&files) as u8),
-        Commands::Repl { host } => {
-            match repl::run_with_host(&host) {
+        Commands::Repl { host, seed } => {
+            match repl::run_with_options(&host, seed) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("repl error: {e}");

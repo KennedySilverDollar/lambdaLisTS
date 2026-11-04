@@ -232,3 +232,38 @@ M14 監査で発見された食い違いを、規範（§8.6・付録C・Rust実
 1. do-io の名前なし束縛が §7.4 rule 5 の Result 要件を引き継ぐことの明文化（現状: `_` 束縛と同一に適用。defn! 内の EffectCall のみ免除。`(do (impure-non-result host) ...)` は type-mismatch）。
 2. do の束縛が `[...]` のみであることの明文化（パーサは P0 で `(name expr)` も受理していたが、do-io との曖昧さ解消のため `[...]` のみを束縛とみなす実装に変更）。
 3. JS 側モック host（`host.mock.js` 形状、design/host-di.md §5）の実装は次マイルストーンへ（今回は driver 注入で記録一致を検証）。
+
+---
+
+## 14. M22: prop 実評価（反例生成・縮小、fast-check 相当）
+
+SPEC §10.1 の prop op を unsupported-in-p0 から実評価へ移した（ユーザー指示どおり。§10.1 を採用済み範囲で更新し、§13 T9 は本文無変更＋追記のみ）。
+
+### 採用済み設計判断の実装
+- **自前 PRNG**: `src/rng.rs` に splitmix64 を自前実装（依存追加なし・unsafe なし）。外部乱数源・システム時刻は使わない。
+- **明示シード**: 既定はドキュメント化された定数 `rng::DEFAULT_SEED = 0x5EED_1A7C_2B21_9D4F`。REPL prop リクエストに `"seed": <u64>`、CLI に `lists repl --seed <u64>`（不正値は clap が exit 2）。**同じシード → 同じ生成列・同じ反例（決定性 MUST）** — テストで2回実行して応答が一致することを確認。
+
+### 実装（src/prop.rs）
+- **生成器** `gen_value(ty, aliases, rng, depth)`: number は境界値 {0,1,-1,±2^53} を半分の確率で選び、他は [-100,100] の整数。string は長さ 0..=8・文字種 `ab01 あ😀`(空白含む)。Array は長さ 0..=6（0 に偏らせる）。obj/union は再帰（union は tag を一様ランダム選択）。Result は Ok/Err 50/50。再帰深さ上限 MAX_GEN_DEPTH=6 では最小値（nil/空/0）へ。関数型・型変数は生成不可（`is_generatable` で検査時に type-mismatch）。
+- **評価** `run_prop`: 既定 **100試行**（`DEFAULT_MAX_TRIALS`）。失敗（false または実行時エラー）で反例を記録し縮小へ。
+- **縮小** `shrink_candidates` + 貪欲ループ: number は 0 と半分へ、string は空/半分/末尾削除へ、Array は空/末尾削除/先頭削除/半分＋要素ごと、bool は false へ、obj はフィールドごと。失敗し続ける候補のみ採用。
+- **失敗出力** `prop_result_json`: 機械可読 JSON で `{ok:false, prop, seed, trials, counterexample:{param: value}, shrunk:{param: value}, fix:{op:"insert", path:"(prop <name>)", template:"(example <body with shrunk literals> => false)"}}`（`value_to_lit` は文字列を引用符つきで、`print_core`/`subst_params` で本体をリテラル埋め込み）。成功時は `{ok:true, prop, seed, trials}`。
+- **検査**: forall パラメータが生成不可の型（関数等）なら check 時に type-mismatch。prop 本体の EffectCall は effect-violation（defn! 外のため host 無し）。
+- **REPL**: prop op が実評価（seed はリクエスト優先、なければ REPL のシード）。未定義 prop は unbound-symbol。
+
+### テスト
+- rng 単体（同シード同列・範囲）、prop 単体（生成規則、縮小規則、真 prop pass、偽 prop で反例＋number→0/Array→[] へ縮小、同シード決定性、money.lts の prop が 100試行 pass、失敗 JSON の機械可読性と fix 形状）
+- tools.rs: `repl_prop_money_lts_passes_with_seed`（reload money.lts → prop が seed=42・trials=100 で pass）、`repl_prop_false_prop_reports_counterexample_shrink_seed`（偽 prop の反例・shrunk x=0・seed・trials・fix template、同一シードで応答一致）、未定義 prop と不正 --seed
+- golden: `repl.responses.json` の id:3 応答のみが unsupported-in-p0 → unbound-symbol（prop 未読込時の not-found）に変わったことを diff で確認。他のゴールデン無変更
+- スモーク追記: S22（money.lts の prop が seed=42・100試行で pass）、S23（偽 prop に反例・縮小 x=0・シードが機械可読で返る）。S1–S21 不変、合計は動的表示
+
+### 検証
+- `cargo test` 229全パス、`LISTS_BACKEND=mock` acceptance 13/13、スモーク **23/23**、warning 0。
+
+### 残課題（SPEC への追記「提案」— 本マイルストーンでは SPEC には採用済み部分（§10.1 の prop 実評価・シード意味論）のみ反映）
+1. 生成規則の規範化（§3.7 または §11.6 追記案）: number の境界値集合と範囲、string の長さ上限と文字種、Array のサイズ分布、union の tag 選択分布、再帰深さ上限と最小値の規約、生成対象外の型（関数・型変数）の扱い。現状は実装どおり（上記）を規範案とする。
+2. 試行回数の規範化: 既定 100（`DEFAULT_MAX_TRIALS`）を MUST/SHOULD で明記するか。
+3. 失敗時出力の規範化（§10.1）: counterexample/shrunk/trials/seed/fix の各フィールドの機械可読性と、fix template を「そのまま example として貼れる形」にする規約（現状は body をリテラル埋め込みした `(example <body> => false)`。Match/Lam 等は `<expr>` にフォールバックすることの明記）。
+4. 縮小アルゴリズムの規範化（どの程度まで縮小するか: 現状は貪欲に size が減る限り。最小反例の定義を詰めるか）。
+5. GUIDE「乱数・システム時刻を使わない」の P1 での拡張案: 「非決定的な乱数を使わない（自前の決定的 PRNG と明示シードのみ）」への文言変更を GUIDE への追記提案として報告（本マイルストーンでは GUIDE 未変更）。
+6. JS バックエンドでの prop 実行は未実装（REPL/interp のみ。§13 T9 は REPL 中心のため現状のまま）。差分テスト対象外。

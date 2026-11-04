@@ -280,6 +280,25 @@ pub fn check_effects(defs: &[CoreDef], purity: &BTreeMap<Rc<str>, bool>) -> Vec<
         }
     }
     for d in defs {
+        // prop 本体も defn! の外なので host が無い（純粋であること）
+        if let CoreDef::Prop { body, path, .. } = d {
+            let mut sites = Vec::new();
+            find_effect_calls(body, &mut sites);
+            for site in &sites {
+                diags.push(Diagnostic {
+                    kind: DiagKind::EffectViolation,
+                    severity: Severity::Error,
+                    span: site.span.clone(),
+                    message: format!(
+                        "エフェクト呼び出し '{effect}!' は defn! 本体内でのみ可能です（host は defn! の第1引数として渡されます §12.6）",
+                        effect = site.effect
+                    ),
+                    data: Some(json!({ "path": path, "effect": site.effect })),
+                    fix: None,
+                });
+            }
+            continue;
+        }
         if let CoreDef::Example {
             actual,
             expected,
