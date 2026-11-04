@@ -114,7 +114,7 @@ impl Interp {
             }
             BuiltinKind::StrSlice => {
                 let s: Vec<char> = str_v(&args[0])?.chars().collect();
-                let (a, b) = js_slice_bounds(s.len(), num(&args[1])?, num(&args[2])?);
+                let (a, b) = slice_bounds(s.len(), num(&args[1])?, num(&args[2])?);
                 Ok(Value::Str(Rc::from(s[a..b].iter().collect::<String>().as_str())))
             }
             BuiltinKind::Len => Ok(Value::Num(str_v(&args[0])?.chars().count() as f64)),
@@ -139,7 +139,7 @@ impl Interp {
             BuiltinKind::Count => Ok(Value::Num(arr_v(&args[0])?.len() as f64)),
             BuiltinKind::Slice => {
                 let arr = arr_v(&args[0])?;
-                let (a, b) = js_slice_bounds(arr.len(), num(&args[1])?, num(&args[2])?);
+                let (a, b) = slice_bounds(arr.len(), num(&args[1])?, num(&args[2])?);
                 Ok(Value::Array(arr[a..b].to_vec()))
             }
             BuiltinKind::Push => {
@@ -251,7 +251,7 @@ impl Interp {
     }
 }
 
-fn js_slice_bounds(len: usize, start: f64, end: f64) -> (usize, usize) {
+fn slice_bounds(len: usize, start: f64, end: f64) -> (usize, usize) {
     let len_f = len as f64;
     let s = if start.is_nan() {
         0.0

@@ -199,3 +199,46 @@ fn cli_compile_backend_flag_js_default_and_unknown() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("unknown backend"), "{stdout}");
 }
+
+#[test]
+fn diagnostics_contain_no_js_engine_text() {
+    // M14 作業4: 診断JSON（kind/message/data）にJSエンジン由来の文言が混入していないことを全フィクスチャで検査する
+    let markers = [
+        "RangeError",
+        "TypeError",
+        "SyntaxError",
+        "Maximum call stack",
+        "is not defined",
+        "undefined",
+        "prototype",
+    ];
+    for name in [
+        "money.lts",
+        "cart.lts",
+        "stock.lts",
+        "effects.lts",
+        "broken.lts",
+        "cycle-a.lts",
+        "mod-missing.lts",
+        "tail-self.lts",
+        "tail-mutual.lts",
+    ] {
+        let abs = fixture_path(name);
+        let src = std::fs::read_to_string(&abs).expect("read fixture");
+        let lex = lists::lexer::tokenize(&src, &abs);
+        let (program, mut diags) = lists::parser::parse_program(&lex);
+        diags.extend(lex.diagnostics.iter().cloned());
+        let (_, ds) = lists::desugar::desugar(&program);
+        diags.extend(ds);
+        let mut cache = lists::check::ModuleCache::default();
+        let checked = lists::check::check_file(&abs, &mut cache);
+        diags.extend(checked.diagnostics.iter().cloned());
+        let json = serde_json::to_string(&diags).expect("serialize diagnostics");
+        for m in markers {
+            assert!(
+                !json.contains(m),
+                "{name}:診断JSONにJS由来の文言 '{m}' が混入しています: {json}"
+            );
+        }
+    }
+}

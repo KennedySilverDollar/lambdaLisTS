@@ -60,10 +60,6 @@ pub type AstPath = String;
 #[error("internal-error: {0}")]
 pub struct InternalError(pub String);
 
-pub fn to_json_line(_diags: &[Diagnostic]) -> String {
-    unimplemented!("diagnostic: P0 未実装")
-}
-
 pub fn ast_path<S: AsRef<str>>(base: &str, segments: &[S]) -> AstPath {
     if segments.is_empty() {
         base.to_string()
