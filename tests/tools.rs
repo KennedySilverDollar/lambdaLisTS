@@ -177,3 +177,25 @@ fn cli_unknown_subcommand_is_usage_error() {
     let out = run_lists(&["nope"], None);
     assert_eq!(out.status.code(), Some(2));
 }
+
+#[test]
+fn cli_compile_backend_flag_js_default_and_unknown() {
+    let dir = temp_dir("backend-flag");
+    let money = fixture_path("money.lts");
+    let out_dir = dir.join("out");
+    // デフォルト（--backend 省略）と --backend js は同じ挙動
+    let out = run_lists(
+        &["compile", &money, "--out", out_dir.to_str().expect("utf8"), "--backend", "js"],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[]");
+    for f in ["money.js", "money.js.map", "runtime.js"] {
+        assert!(out_dir.join(f).exists(), "{f} が出力されていること");
+    }
+    // 未知のバックエンド名はエラー（exit 2 + 診断JSON）
+    let out = run_lists(&["compile", &money, "--backend", "wasm"], None);
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("unknown backend"), "{stdout}");
+}
