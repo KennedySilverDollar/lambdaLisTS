@@ -3,8 +3,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use lists::check::{check_file, ModuleCache};
+use lists::desugar::desugar_expr;
+use lists::eval::{eval_core, global_env, load_defs, Interp};
+use lists::host::{inject_host, MockHost};
+use lists::parser::parse_expr;
 use lists::desugar::{desugar, CoreDef};
-use lists::diagnostic::{DiagKind, Diagnostic};
+use lists::diagnostic::Diagnostic;
 use lists::emit::{emit, EmitInput, EmitOutput};
 use lists::lexer::tokenize;
 use lists::parser::parse_program;
@@ -40,6 +44,7 @@ fn emit_fixture(base: &str) -> Result<EmitOutput, Vec<Diagnostic>> {
         file: format!("{base}.js"),
         source_file: format!("{base}.lts"),
         type_names,
+        impure_names: BTreeSet::new(),
     })
 }
 
@@ -52,6 +57,7 @@ fn emit_src(src: &str, file: &str) -> Result<EmitOutput, Vec<Diagnostic>> {
         file: file.to_string(),
         source_file: "test.lts".to_string(),
         type_names: BTreeSet::new(),
+        impure_names: BTreeSet::new(),
     })
 }
 
@@ -158,17 +164,26 @@ fn cart_js_runs_empty_cart_err_in_node() {
     assert!(stdout.contains("\"tag\":\"EmptyCart\""), "{stdout}");
 }
 
-#[test]
-fn defn_bang_module_is_emit_error() {
-    let r = emit_src(
-        "(effect log : (fn (s : string) : nil))\n(defn! f (s : string) : nil (log! s))",
-        "test.js",
-    );
-    let errs = r.expect_err("defn! モジュールはエラーのはず");
-    assert!(errs
-        .iter()
-        .any(|d| d.kind == DiagKind::UnsupportedInP0 && d.message.contains("defn!")));
-}
+    #[test]
+    fn defn_bang_module_emits_async_and_runs_in_node() {
+        let src = "(effect log : (fn (s : string) : nil))\n(effect db : (fn (op : string) (key : string) : (Option string)))\n(type Host (obj (log : (fn (s : string) : nil)) (db : (fn (op : string) (key : string) : (Option string)))))\n(defn! run (host : Host) (x : number) : (Result number string) (do [_ (log! (str x))] [v (db! \"get\" (str x))] (match v [nil (ok x)] [s (ok (+ x 1))])))\n(example (run (obj (log (fn (s : string) : nil nil)) (db (fn (op : string) (key : string) : (Option string) nil))) 1) => (ok 1))\n(example (run (obj (log (fn (s : string) : nil nil)) (db (fn (op : string) (key : string) : (Option string) \"v\"))) 1) => (ok 2))";
+        let out = emit_src(src, "effect-run.js").expect("defn! は P1 で emit できる");
+        assert!(out.js.contains("async function run(host, x)"), "{}", out.js);
+        assert!(out.js.contains("await host.log("), "{}", out.js);
+        assert!(out.js.contains("const actual = (await run("), "{}", out.js);
+        let dir = temp_dir("defn-bang");
+        write_out(&dir, "effect-run", &out);
+        let r = run_node(&dir, &["effect-run.js"]);
+        let stdout = String::from_utf8_lossy(&r.stdout);
+        assert_eq!(
+            r.status.code(),
+            Some(0),
+            "stderr: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        assert!(stdout.contains("example 0: ok"), "{stdout}");
+        assert!(stdout.contains("example 1: ok"), "{stdout}");
+    }
 
 #[test]
 fn t8_deep_recursion_stack_trace_points_to_lts_line() {
@@ -430,4 +445,143 @@ fn stdlib_edge_emit_is_deterministic_and_uses_local_helpers() {
     assert!(r1.js.contains("const $stdlib_str = (a) => $print(a);"), "{}", r1.js);
     assert!(r1.js.contains("const $stdlib_len = (s) => [...s].length;"), "{}", r1.js);
     assert!(!r1.js.contains("$stdlib_split"), "{}", r1.js);
+}
+
+#[test]
+fn effect_run_js_golden_and_source_map_kept() {
+    let out = emit_fixture("effect-run").expect("emit effect-run");
+    let again = emit_fixture("effect-run").expect("emit again");
+    assert_eq!(out.js, again.js, "defn! を含む生成 JS も決定的であること");
+    let map_json: serde_json::Value = serde_json::from_str(&out.map).expect("map json");
+    assert_eq!(map_json["version"], 3);
+    assert_eq!(map_json["sources"], serde_json::json!(["effect-run.lts"]));
+    assert!(!map_json["mappings"].as_str().expect("mappings").is_empty());
+    assert!(out.js.contains("await host.log("), "{}", out.js);
+    assert_golden("effect-run.js", &out.js);
+    assert_golden("effect-run.js.map", &out.map);
+}
+
+#[test]
+fn mock_host_call_log_diff_interp_vs_node() {
+    // M21: モック host の呼び出し記録が interp と JS（node）で一致することを検証する。
+    // JS 側は driver がモック host を注入して run を呼び、記録を印字する。
+    let out = emit_fixture("effect-mock").expect("emit effect-mock");
+    let dir = temp_dir("effect-mock");
+    write_out(&dir, "effect-mock", &out);
+    let driver = r#"import { run } from "./effect-mock.js";
+const calls = [];
+const host = {
+  log: async (s) => { calls.push(["log", s]); return null; },
+  db: async (op, key) => { calls.push(["db", op, key]); return null; },
+};
+const r = await run(host, 1);
+console.log("result " + JSON.stringify(r));
+console.log("calls " + JSON.stringify(calls));
+"#;
+    std::fs::write(dir.join("run-mock.js"), driver).expect("write driver");
+    let run1 = run_node(&dir, &["run-mock.js"]);
+    let run2 = run_node(&dir, &["run-mock.js"]);
+    let stdout = String::from_utf8_lossy(&run1.stdout).into_owned();
+    assert_eq!(run1.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&run1.stderr));
+    assert_eq!(stdout, String::from_utf8_lossy(&run2.stdout).into_owned(), "JS 側も決定的");
+    let result_line = stdout.lines().find(|l| l.starts_with("result ")).expect("result line");
+    let calls_line = stdout.lines().find(|l| l.starts_with("calls ")).expect("calls line");
+    let js_result: serde_json::Value = serde_json::from_str(result_line.strip_prefix("result ").expect("p")).expect("json");
+    let js_calls: serde_json::Value = serde_json::from_str(calls_line.strip_prefix("calls ").expect("p")).expect("json");
+
+    // interp 側: 同じ fixture をモック host（host.rs）で実行し、結果と記録を比較する
+    let abs = fixture_path("effect-mock.lts");
+    let (defs, diags) = pipeline(&abs);
+    assert!(diags.is_empty(), "{diags:?}");
+    let mut cache = ModuleCache::default();
+    let checked = check_file(&abs, &mut cache);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let mock = MockHost::from_effects(&checked.effects, &checked.type_aliases);
+    let env = global_env();
+    load_defs(&defs, &env);
+    inject_host(&env, "host", &mock.obj());
+    let (expr, ediags) = parse_expr("(run host 1)", "t.lts");
+    assert!(ediags.is_empty(), "{ediags:?}");
+    let core = desugar_expr(&expr.expect("expr"));
+    let mut interp = Interp::new();
+    let result = eval_core(&mut interp, &core, &env).expect("interp eval");
+    let interp_result = lists::backends::value_to_json(&result);
+    let interp_calls = serde_json::Value::Array(
+        mock.calls()
+            .iter()
+            .map(|c| {
+                let mut a = vec![serde_json::Value::String(c.effect.to_string())];
+                a.extend(c.args.iter().map(lists::backends::value_to_json));
+                serde_json::Value::Array(a)
+            })
+            .collect(),
+    );
+    fn json_eq_numbers_as_f64(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+        match (a, b) {
+            (serde_json::Value::Number(x), serde_json::Value::Number(y)) => {
+                x.as_f64() == y.as_f64()
+            }
+            (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+                x.len() == y.len()
+                    && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| json_eq_numbers_as_f64(v, w)))
+            }
+            (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y.iter()).all(|(u, v)| json_eq_numbers_as_f64(u, v))
+            }
+            _ => a == b,
+        }
+    }
+    assert!(json_eq_numbers_as_f64(&interp_result, &js_result), "結果が一致: interp vs node: {interp_result} vs {js_result}");
+    assert_eq!(interp_calls, js_calls, "モック host の呼び出し記録が一致: interp vs node");
+    assert_eq!(
+        js_calls,
+        serde_json::json!([["log", "run:1"], ["db", "get", "1"]]),
+        "記録内容の確認: {js_calls}"
+    );
+}
+
+#[test]
+fn decimal_edge_js_golden_and_error_parity_with_interp() {
+    // golden 追記（生成 JS の BigInt lowering を固定）
+    let out = emit_fixture("decimal-edge").expect("emit decimal-edge");
+    assert!(out.js.contains("1500000000000000000n"), "{}", out.js);
+    assert!(out.js.contains("$dec_mul"), "{}", out.js);
+    assert!(out.js.contains("$json(actual)"), "{}", out.js);
+    assert_golden("decimal-edge.js", &out.js);
+    assert_golden("decimal-edge.js.map", &out.map);
+
+    // 実行時エラーの機械可読な一致: 0 除算とオーバーフローで interp と node が同じ文字列を出す
+    let src = "(export dv ov)\n(defn dv (a : decimal) (b : decimal) : decimal (/ a b))\n(defn ov (a : decimal) (b : decimal) : decimal (* a b))";
+    let out2 = emit_src(src, "dec-err.js").expect("emit");
+    let dir = temp_dir("dec-err");
+    write_out(&dir, "dec-err", &out2);
+    let driver = r#"import { dv, ov } from "./dec-err.js";
+const tryCall = (f, ...args) => { try { return "ok " + String(f(...args)); } catch (e) { return "err " + e.message; } };
+console.log(tryCall(dv, 1n * 10n ** 18n, 0n));
+console.log(tryCall(ov, 100000000000n * 10n ** 18n, 100000000000n * 10n ** 18n));
+"#;
+    std::fs::write(dir.join("run.js"), driver).expect("write driver");
+    let r = run_node(&dir, &["run.js"]);
+    let stdout = String::from_utf8_lossy(&r.stdout).into_owned();
+    assert_eq!(r.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&r.stderr));
+
+    // interp 側
+    let lex = lists::lexer::tokenize(src, "t.lts");
+    let (program, _) = lists::parser::parse_program(&lex);
+    let (defs, _) = lists::desugar::desugar(&program);
+    let env = lists::eval::global_env();
+    lists::eval::load_defs(&defs, &env);
+    let mut interp = lists::eval::Interp::new();
+    let dv = env.lookup("dv").expect("dv");
+    let ov = env.lookup("ov").expect("ov");
+    let s = lists::value::Value::Dec(lists::decimal::S);
+    let zero = lists::value::Value::Dec(0);
+    let big = lists::value::Value::Dec(100_000_000_000 * lists::decimal::S);
+    let e1 = interp.apply(dv, vec![s.clone(), zero]).expect_err("div by zero must error");
+    let e2 = interp.apply(ov, vec![big.clone(), big]).expect_err("overflow must error");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines[0], format!("err {}", e1.to_string().replace("runtime error: ", "")), "JS: {stdout}");
+    assert_eq!(lines[1], format!("err {}", e2.to_string().replace("runtime error: ", "")), "JS: {stdout}");
+    assert!(lines[0].contains("decimal-division-by-zero"), "{stdout}");
+    assert!(lines[1].contains("decimal-overflow"), "{stdout}");
 }

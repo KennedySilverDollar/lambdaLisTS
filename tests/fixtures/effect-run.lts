@@ -1,0 +1,41 @@
+;; M19 (P1 defn! 完全実装): エフェクト呼び出しの実行テスト。
+;; host は defn! の第1引数として明示的に渡す（SPEC §12.6）。
+(effect log : (fn (s : string) : nil))
+(effect db  : (fn (op : string) (key : string) : (Option string)))
+
+(type Host
+  (obj (log : (fn (s : string) : nil))
+       (db  : (fn (op : string) (key : string) : (Option string)))))
+
+(export run count-down)
+
+(defn! run (host : Host) (x : number) : (Result number string)
+  (do
+    [_ (log! (str-concat "run:" (str x)))]
+    [v (db! "get" (str x))]
+    (match v
+      [nil (ok x)]
+      [s (ok (+ x 1))])))
+
+;; 末尾再帰の defn!（async でも while ループで定数スタック）
+(defn! count-down (host : Host) (n : number) : (Result number nil)
+  (if (= n 0)
+    (ok 0)
+    (do
+      [_ (log! (str n))]
+      (count-down host (- n 1)))))
+
+(example (run (obj (log (fn (s : string) : nil nil))
+                   (db (fn (op : string) (key : string) : (Option string) nil)))
+              1)
+  => (ok 1))
+
+(example (run (obj (log (fn (s : string) : nil nil))
+                   (db (fn (op : string) (key : string) : (Option string) "v")))
+              1)
+  => (ok 2))
+
+(example (count-down (obj (log (fn (s : string) : nil nil))
+                          (db (fn (op : string) (key : string) : (Option string) nil)))
+                     100000)
+  => (ok 0))

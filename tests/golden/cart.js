@@ -4,7 +4,7 @@ const $stdlib_lt = (a, b) => a < b;
 const $stdlib_eq = (a, b) => structuralEqual(a, b);
 const $stdlib_array = (...a) => a;
 const $stdlib_count = (arr) => arr.length;
-const $stdlib_find = (arr, f) => { for (const x of arr) if (f(x)) return ok(x); return null; };
+const $stdlib_find = (arr, f) => { for (const x of arr) if (f(x)) return x; return null; };
 const $stdlib_fold_left = (arr, init, f) => arr.reduce((acc, x) => f(acc, x), init);
 
 import { add_money, zero } from "./money.js";

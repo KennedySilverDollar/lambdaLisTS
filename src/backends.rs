@@ -99,12 +99,15 @@ pub struct Frontend {
     pub file: String,
     pub defs: Vec<CoreDef>,
     pub type_names: BTreeSet<String>,
+    /// import 先も含む defn! 名の集合（emit の async 判定用 §7.2/§12.4）。
+    pub impure_names: BTreeSet<String>,
 }
 
 /// 共通のフロントエンド（lex → parse → desugar → check）をソースごとに回し、診断を集める。
 fn frontend(sources: &[SourceFile]) -> (Vec<Diagnostic>, Vec<Frontend>) {
     let mut diagnostics = Vec::new();
     let mut out = Vec::new();
+    let mut cache = ModuleCache::default();
     for sf in sources {
         let file_s = sf.path.to_string_lossy().into_owned();
         let src = match std::fs::read_to_string(&sf.path) {
@@ -120,7 +123,6 @@ fn frontend(sources: &[SourceFile]) -> (Vec<Diagnostic>, Vec<Frontend>) {
         diagnostics.extend(parse_diags);
         let (defs, ds_diags) = desugar(&program);
         diagnostics.extend(ds_diags);
-        let mut cache = ModuleCache::default();
         let checked = check_file(&file_s, &mut cache);
         diagnostics.extend(checked.diagnostics.iter().cloned());
         let type_names: BTreeSet<String> = checked.type_aliases.keys().map(|k| k.to_string()).collect();
@@ -128,7 +130,19 @@ fn frontend(sources: &[SourceFile]) -> (Vec<Diagnostic>, Vec<Frontend>) {
             file: file_s,
             defs,
             type_names,
+            impure_names: BTreeSet::new(),
         });
+    }
+    // import 先モジュールも含めた defn! 名を集める（check の cache に全モジュールが入っている）
+    let impure_names: BTreeSet<String> = cache
+        .modules
+        .values()
+        .flat_map(|m| m.defn_purity.iter())
+        .filter(|(_, p)| !**p)
+        .map(|(n, _)| n.to_string())
+        .collect();
+    for fe in out.iter_mut() {
+        fe.impure_names = impure_names.clone();
     }
     (diagnostics, out)
 }
@@ -149,6 +163,7 @@ impl Backend for JsBackend {
                 file: out_name.clone(),
                 source_file: sf.name.clone(),
                 type_names: fe.type_names.clone(),
+                impure_names: fe.impure_names.clone(),
             }) {
                 Ok(out) => {
                     let p = out_dir.join(&out_name);
@@ -182,6 +197,7 @@ impl Backend for JsBackend {
 pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Num(n) => serde_json::Number::from_f64(*n).map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Value::Dec(s) => json!({ "tag": "Dec", "value": crate::decimal::fmt_dec(*s) }),
         Value::Str(s) => serde_json::Value::String(s.to_string()),
         Value::Bool(b) => serde_json::Value::Bool(*b),
         Value::Nil => serde_json::Value::Null,

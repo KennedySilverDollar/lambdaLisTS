@@ -4,10 +4,12 @@ use serde_json::json;
 
 use crate::desugar::CoreDef;
 use crate::diagnostic::{DiagKind, Diagnostic, Severity};
+use crate::effects::{find_defn_calls, find_effect_calls};
 use crate::ir::Core;
 use crate::sourcemap_out::MapBuilder;
 use crate::span::Span;
 use crate::stdlib::stdlib;
+use crate::types::Type;
 use crate::value::Value;
 
 const JS_RESERVED: &[&str] = &[
@@ -25,6 +27,10 @@ const SLICE_BOUNDS_JS: &str = "function $slice_bounds(len, start, end) {\n  cons
 
 // SPEC §11.6/付録C #10: str の印字規約（print_value 互換）。f64 は指数表記を展開する。
 const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (Array.isArray(v)) return \"[\" + v.map($print).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $print_num(n) {\n  if (Number.isNaN(n)) return \"NaN\";\n  if (n === Infinity) return \"Infinity\";\n  if (n === -Infinity) return \"-Infinity\";\n  if (Object.is(n, -0)) return \"-0\";\n  const s = String(n);\n  if (s.indexOf(\"e\") < 0 && s.indexOf(\"E\") < 0) return s;\n  const m = /^(-?)(\\d+)(?:\\.(\\d+))?[eE]([+-]?\\d+)$/.exec(s);\n  if (!m) return s;\n  const sign = m[1];\n  const digits = m[2] + (m[3] || \"\");\n  const point = m[2].length + parseInt(m[4], 10);\n  if (point <= 0) return sign + \"0.\" + \"0\".repeat(-point) + digits;\n  if (point >= digits.length) return sign + digits + \"0\".repeat(point - digits.length);\n  return sign + digits.slice(0, point) + \".\" + digits.slice(point);\n}\nfunction $cmp_str(a, b) {\n  const pa = [...a];\n  const pb = [...b];\n  const n = Math.min(pa.length, pb.length);\n  for (let i = 0; i < n; i++) {\n    const d = pa[i].codePointAt(0) - pb[i].codePointAt(0);\n    if (d !== 0) return d;\n  }\n  return pa.length - pb.length;\n}\n";
+
+// decimal（M23）用のローカルヘルパ。BigInt のスケール済み整数で interp(i128) とビット一致する。
+// エラーメッセージは interp 側（src/decimal.rs の ERR_*）と同一文字列。
+const DEC_JS: &str = "const $DEC_S = 10n ** 18n;\nconst $DEC_MAX = 170141183460469231731687303715884105727n;\nfunction $dec_check(r) { if (r > $DEC_MAX || r < -$DEC_MAX) throw new Error(\"decimal-overflow\"); return r; }\nconst $dec_add = (a, b) => $dec_check(a + b);\nconst $dec_sub = (a, b) => $dec_check(a - b);\nconst $dec_mul = (a, b) => { const p = a * b; const neg = p < 0n; const ap = neg ? -p : p; let q = ap / $DEC_S; const r = ap % $DEC_S; if (2n * r >= $DEC_S) q += 1n; return $dec_check(neg ? -q : q); };\nconst $dec_div = (a, b) => { if (b === 0n) throw new Error(\"decimal-division-by-zero\"); const neg = (a < 0n) !== (b < 0n); const num = (a < 0n ? -a : a) * $DEC_S; const den = b < 0n ? -b : b; let q = num / den; const r = num % den; if (2n * r >= den) q += 1n; return $dec_check(neg ? -q : q); };\nfunction $print_dec(v) { const neg = v < 0n; const a = neg ? -v : v; const i = a / $DEC_S; const f = a % $DEC_S; return (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\"); }\nconst $to_dec = (a) => { if (typeof a !== \"number\" || Number.isNaN(a) || !Number.isFinite(a)) throw new Error(\"decimal-overflow\"); const m = /^([+-]?)(\\d+)(?:\\.(\\d+))?e([+-]?\\d+)$/.exec(a.toExponential()); if (!m) throw new Error(\"decimal-overflow\"); const sign = m[1] === \"-\" ? -1n : 1n; const digits = m[2] + (m[3] || \"\"); const exp = parseInt(m[4], 10) - (m[3] || \"\").length + 18; const mant = BigInt(digits); let r; if (exp >= 0) { r = mant * 10n ** BigInt(exp); } else { const den = 10n ** BigInt(-exp); let q = mant / den; const rem = mant % den; if (2n * rem >= den) q += 1n; r = q; } return $dec_check(sign * r); };\nfunction $json(v) { if (typeof v === \"bigint\") return JSON.stringify({ tag: \"Dec\", value: $print_dec(v) }); if (Array.isArray(v)) return \"[\" + v.map($json).join(\",\") + \"]\"; if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $json(v[k])).join(\",\") + \"}\"; } return JSON.stringify(v); }\n";
 
 pub fn js_name(name: &str) -> String {
     let mut n = name.replace('-', "_");
@@ -77,6 +83,7 @@ pub fn lit_js(value: &Value) -> String {
             }
         }
         Value::Bool(b) => format!("{b}"),
+        Value::Dec(s) => format!("{s}n"),
         _ => "null".to_string(),
     }
 }
@@ -86,6 +93,8 @@ pub struct EmitInput {
     pub file: String,
     pub source_file: String,
     pub type_names: BTreeSet<String>,
+    /// import 先も含む「defn! の名前」集合（async 生成の要否判定用。ローカルの defn! は pure フラグから自動で足す）。
+    pub impure_names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +131,103 @@ fn contains_error_node(e: &Core) -> bool {
     }
 }
 
+/// エフェクト名を host オブジェクトのプロパティアクセスにする（§12.3/§12.4）。
+/// host のフィールドは obj リテラルと同じく js_name で出力するので、ここも js_name に揃える。
+fn effect_prop(name: &str) -> String {
+    format!(".{}", js_name(name))
+}
+
+fn core_has_effect_call(e: &Core) -> bool {
+    let mut sites = Vec::new();
+    find_effect_calls(e, &mut sites);
+    !sites.is_empty()
+}
+
+fn core_calls_impure(e: &Core, impure: &BTreeSet<String>) -> bool {
+    let mut calls = Vec::new();
+    find_defn_calls(e, &mut calls);
+    calls.iter().any(|c| impure.contains(c.callee.as_ref()))
+}
+
+/// P1: defn!（またはエフェクト呼び出しを含む式）があるモジュールは async 生成を行う。
+fn defs_use_async(defs: &[CoreDef], impure: &BTreeSet<String>) -> bool {
+    for d in defs {
+        match d {
+            CoreDef::Defn { pure, body, .. } => {
+                if !pure || core_has_effect_call(body) || core_calls_impure(body, impure) {
+                    return true;
+                }
+            }
+            CoreDef::Example {
+                actual, expected, ..
+            } => {
+                if core_has_effect_call(actual) || core_has_effect_call(expected) {
+                    return true;
+                }
+            }
+            CoreDef::Prop { body, .. } => {
+                if core_has_effect_call(body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn core_uses_decimal(e: &Core) -> bool {
+    match e {
+        Core::Lit { value: Value::Dec(_), .. } => true,
+        Core::Var { name, .. } => matches!(name.as_ref(), "to-dec" | "to-num"),
+        Core::App { f, args, .. } => {
+            core_uses_decimal(f)
+                || args.iter().any(core_uses_decimal)
+        }
+        Core::Lam { body, .. } => core_uses_decimal(body),
+        Core::Let { rhs, body, .. } => core_uses_decimal(rhs) || core_uses_decimal(body),
+        Core::If { cond, then, else_, .. } => {
+            core_uses_decimal(cond) || core_uses_decimal(then) || core_uses_decimal(else_)
+        }
+        Core::Match { scrutinee, arms, .. } => {
+            core_uses_decimal(scrutinee) || arms.iter().any(|a| core_uses_decimal(&a.body))
+        }
+        Core::Obj { fields, .. } => fields.iter().any(|(_, c)| core_uses_decimal(c)),
+        Core::Field { obj, .. } => core_uses_decimal(obj),
+        Core::EffectCall { args, .. } => args.iter().any(core_uses_decimal),
+        Core::Do { binds, body, .. } => {
+            binds.iter().any(|b| core_uses_decimal(&b.expr)) || core_uses_decimal(body)
+        }
+        _ => false,
+    }
+}
+
+fn type_is_dec(t: &Type) -> bool {
+    matches!(t, Type::Dec)
+}
+
+fn defs_use_decimal(defs: &[CoreDef]) -> bool {
+    defs.iter().any(|d| match d {
+        CoreDef::Defn {
+            body,
+            params,
+            ret,
+            ..
+        } => {
+            core_uses_decimal(body)
+                || params.iter().any(|p| type_is_dec(&p.ty))
+                || type_is_dec(ret)
+        }
+        CoreDef::Example {
+            actual, expected, ..
+        } => core_uses_decimal(actual) || core_uses_decimal(expected),
+        CoreDef::Prop { body, params, .. } => {
+            core_uses_decimal(body) || params.iter().any(|p| type_is_dec(&p.ty))
+        }
+        _ => false,
+    })
+}
+
 pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
     let mut errors: Vec<Diagnostic> = Vec::new();
     for d in &input.defs {
@@ -141,7 +247,6 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
             CoreDef::Defn {
                 name,
                 body,
-                pure,
                 span,
                 path,
                 ..
@@ -152,18 +257,6 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
                         severity: Severity::Error,
                         span: span.clone(),
                         message: format!("フォーム '{name}' にパースエラーの回復ノードが含まれます"),
-                        data: Some(json!({ "path": path })),
-                        fix: None,
-                    });
-                }
-                if !pure {
-                    errors.push(Diagnostic {
-                        kind: DiagKind::UnsupportedInP0,
-                        severity: Severity::Error,
-                        span: span.clone(),
-                        message: format!(
-                            "defn! '{name}' は P0 > JS 生成ではエラーです（P1 で完全実装 §7.5）"
-                        ),
                         data: Some(json!({ "path": path })),
                         fix: None,
                     });
@@ -196,7 +289,11 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
     if gen.uses_trampoline() {
         w.line("const $TAIL = Symbol(\"lists.tail\");");
         w.line("const $thunk = (f, args) => ({ [$TAIL]: true, f, args });");
-        w.line("function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = v.f(...v.args); } return v; }");
+        if gen.uses_async {
+            w.line("async function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = await v.f(...v.args); } return v; }");
+        } else {
+            w.line("function $run(v) { while (v !== null && typeof v === \"object\" && v[$TAIL] === true) { v = v.f(...v.args); } return v; }");
+        }
         w.line("");
     }
     for d in &forms {
@@ -444,6 +541,11 @@ struct Gen<'a> {
     tail_kinds: BTreeMap<String, TailKind>,
     scc_members: BTreeMap<String, BTreeSet<String>>,
     cur_tail: Option<TailCtx>,
+    impure_defs: BTreeSet<String>,
+    host_stack: Vec<String>,
+    in_async: bool,
+    uses_async: bool,
+    decimal_used: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -464,6 +566,18 @@ impl<'a> Gen<'a> {
             }
         }
         let analysis = analyze_tail(&input.defs);
+        let mut impure_defs: BTreeSet<String> = input.impure_names.clone();
+        for d in &input.defs {
+            if let CoreDef::Defn {
+                name,
+                pure: false,
+                ..
+            } = d
+            {
+                impure_defs.insert(name.to_string());
+            }
+        }
+        let uses_async = defs_use_async(&input.defs, &impure_defs);
         Gen {
             user_names,
             export_names,
@@ -475,6 +589,11 @@ impl<'a> Gen<'a> {
             tail_kinds: analysis.kinds,
             scc_members: analysis.scc_members,
             cur_tail: None,
+            impure_defs,
+            host_stack: Vec::new(),
+            in_async: false,
+            uses_async,
+            decimal_used: defs_use_decimal(&input.defs),
         }
     }
 
@@ -530,6 +649,9 @@ impl<'a> Gen<'a> {
         for name in &self.stdlib_used {
             out += &format!("const {} = {};\n", stdlib_js_name(name), self.stdlib_impl(name));
         }
+        if self.decimal_used {
+            out += DEC_JS;
+        }
         if !out.is_empty() {
             out.push('\n');
         }
@@ -537,13 +659,36 @@ impl<'a> Gen<'a> {
     }
 
     fn stdlib_impl(&self, name: &str) -> String {
-        let ok = self.runtime_ref("ok");
         let se = self.runtime_ref("structuralEqual");
         match name {
-            "+" => "(a, b) => a + b".to_string(),
-            "-" => "(a, b) => a - b".to_string(),
-            "*" => "(a, b) => a * b".to_string(),
-            "/" => "(a, b) => a / b".to_string(),
+            "+" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_add(a, b) : a + b".to_string()
+                } else {
+                    "(a, b) => a + b".to_string()
+                }
+            }
+            "-" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_sub(a, b) : a - b".to_string()
+                } else {
+                    "(a, b) => a - b".to_string()
+                }
+            }
+            "*" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_mul(a, b) : a * b".to_string()
+                } else {
+                    "(a, b) => a * b".to_string()
+                }
+            }
+            "/" => {
+                if self.decimal_used {
+                    "(a, b) => typeof a === \"bigint\" ? $dec_div(a, b) : a / b".to_string()
+                } else {
+                    "(a, b) => a / b".to_string()
+                }
+            }
             "<" => "(a, b) => a < b".to_string(),
             ">" => "(a, b) => a > b".to_string(),
             "<=" => "(a, b) => a <= b".to_string(),
@@ -554,15 +699,25 @@ impl<'a> Gen<'a> {
             "min" => "(a, b) => { if (Number.isNaN(a)) return b; if (Number.isNaN(b)) return a; return a < b ? a : b; }".to_string(),
             "max" => "(a, b) => { if (Number.isNaN(a)) return b; if (Number.isNaN(b)) return a; return a > b ? a : b; }".to_string(),
             "not" => "(a) => !a".to_string(),
-            "str" => "(a) => $print(a)".to_string(),
+            "str" => {
+                if self.decimal_used {
+                    "(a) => typeof a === \"bigint\" ? $print_dec(a) : $print(a)".to_string()
+                } else {
+                    "(a) => $print(a)".to_string()
+                }
+            }
+            "to-dec" => "(a) => $to_dec(a)".to_string(),
+            "to-num" => "(a) => Number(a) / 1e18".to_string(),
             "str-concat" => "(...a) => a.join(\"\")".to_string(),
             "str-slice" => "(s, i, j) => { const c = [...s]; const [a, b] = $slice_bounds(c.length, i, j); return c.slice(a, b).join(\"\"); }".to_string(),
             "len" => "(s) => [...s].length".to_string(),
             "contains?" => "(s, t) => s.includes(t)".to_string(),
-            "split" => "(s, t) => s.split(t)".to_string(),
+            // §11.6: 空区切りは各 Unicode スカラ値文字を1要素とし空要素を生まない（[...s] はコードポイント単位）
+            "split" => "(s, t) => t === \"\" ? [...s] : s.split(t)".to_string(),
             "array" => "(...a) => a".to_string(),
+            // §11.6: (union T nil) は実行時に生値。成功は arr[trunc(i)]、失敗は null(=nil)。
             "nth" => format!(
-                "(arr, i) => {{ const k = Math.trunc(i); return (i >= 0 && k < arr.length) ? {ok}(arr[k]) : null; }}"
+                "(arr, i) => {{ const k = Math.trunc(i); return (i >= 0 && k < arr.length) ? arr[k] : null; }}"
             ),
             "count" => "(arr) => arr.length".to_string(),
             "slice" => "(arr, i, j) => { const [a, b] = $slice_bounds(arr.length, i, j); return arr.slice(a, b); }".to_string(),
@@ -571,8 +726,9 @@ impl<'a> Gen<'a> {
             "map" => "(arr, f) => arr.map((x) => f(x))".to_string(),
             "filter" => "(arr, f) => arr.filter((x) => f(x))".to_string(),
             "fold-left" => "(arr, init, f) => arr.reduce((acc, x) => f(acc, x), init)".to_string(),
+            // §11.6: 成功は生値 x、失敗は null(=nil)。
             "find" => format!(
-                "(arr, f) => {{ for (const x of arr) if (f(x)) return {ok}(x); return null; }}"
+                "(arr, f) => {{ for (const x of arr) if (f(x)) return x; return null; }}"
             ),
             "any?" => "(arr, f) => arr.some((x) => f(x))".to_string(),
             "all?" => "(arr, f) => arr.every((x) => f(x))".to_string(),
@@ -589,6 +745,7 @@ impl<'a> Gen<'a> {
                 params,
                 body,
                 span,
+                pure,
                 ..
             } => {
                 let exported = if self.export_names.contains(name.as_ref()) {
@@ -605,16 +762,28 @@ impl<'a> Gen<'a> {
                     .unwrap_or(TailKind::Normal);
                 let params_js = params.iter().map(|p| js_name(&p.name)).collect::<Vec<_>>().join(", ");
                 let param_names: Vec<String> = params.iter().map(|p| js_name(&p.name)).collect();
+                // P1 (§12.4/§12.6): defn! は async 関数。host は第1引数（§12.6）。
+                let async_kw = if *pure { "" } else { "async " };
+                let saved_host_len = self.host_stack.len();
+                if !*pure {
+                    let h = params
+                        .first()
+                        .map(|p| js_name(&p.name))
+                        .unwrap_or_else(|| "host".to_string());
+                    self.host_stack.push(h);
+                }
+                let saved_async = self.in_async;
+                self.in_async = !*pure;
                 match kind {
                     TailKind::Normal => {
                         w.map_at(span, Some(name));
-                        w.line(&format!("{exported}function {js}({params_js}) {{"));
+                        w.line(&format!("{exported}{async_kw}function {js}({params_js}) {{"));
                         self.stmt(body, "  ", w);
                         w.line("}");
                     }
                     TailKind::SelfLoop => {
                         w.map_at(span, Some(name));
-                        w.line(&format!("{exported}function {js}({params_js}) {{"));
+                        w.line(&format!("{exported}{async_kw}function {js}({params_js}) {{"));
                         w.map_at(span, None);
                         w.line("  while (true) {");
                         let saved = self.cur_tail.replace(TailCtx::SelfLoop {
@@ -634,17 +803,19 @@ impl<'a> Gen<'a> {
                             .cloned()
                             .unwrap_or_else(|| BTreeSet::from([name.to_string()]));
                         w.map_at(span, Some(name));
-                        w.line(&format!("function {inner}({params_js}) {{"));
+                        w.line(&format!("{async_kw}function {inner}({params_js}) {{"));
                         let saved = self.cur_tail.replace(TailCtx::Trampoline { members });
                         self.stmt(body, "  ", w);
                         self.cur_tail = saved;
                         w.line("}");
                         w.map_at(span, Some(name));
                         w.line(&format!(
-                            "{exported}function {js}({params_js}) {{ return $run({inner}({params_js})); }}"
+                            "{exported}{async_kw}function {js}({params_js}) {{ return $run({inner}({params_js})); }}"
                         ));
                     }
                 }
+                self.in_async = saved_async;
+                self.host_stack.truncate(saved_host_len);
             }
             CoreDef::Import {
                 path,
@@ -676,6 +847,9 @@ impl<'a> Gen<'a> {
                 let i = self.example_index;
                 self.example_index += 1;
                 let se = self.runtime_ref("structuralEqual");
+                // P1: モジュールが async を含む場合、example は defn! を呼びうるので await で包む。
+                let saved_async = self.in_async;
+                self.in_async = self.uses_async;
                 w.map_at(span, None);
                 w.line("{");
                 w.write("  const actual = ");
@@ -684,11 +858,13 @@ impl<'a> Gen<'a> {
                 w.write("  const expected = ");
                 self.expr(expected, "  ", w);
                 w.write(";\n");
+                self.in_async = saved_async;
+                let ser = if self.decimal_used { "$json(actual)" } else { "JSON.stringify(actual)" };
                 w.line(&format!(
-                    "  if (!{se}(actual, expected)) throw new Error(\"example {i} failed: \" + JSON.stringify(actual));"
+                    "  if (!{se}(actual, expected)) throw new Error(\"example {i} failed: \" + {ser});"
                 ));
                 w.line(&format!(
-                    "  console.log(\"example {i}: ok \" + JSON.stringify(actual));"
+                    "  console.log(\"example {i}: ok \" + {ser});"
                 ));
                 w.line("}");
             }
@@ -786,12 +962,27 @@ impl<'a> Gen<'a> {
         };
         for b in binds {
             let r = format!("$r{}", self.fresh());
+            let is_effect = matches!(b.expr, Core::EffectCall { .. });
             w.write(&format!("{ind}const {r} = "));
             self.expr(&b.expr, ind, w);
             w.write(";\n");
-            w.line(&format!("{ind}if ({r}.tag === \"Err\") return {r};"));
-            if b.name.as_ref() != "_" {
-                w.line(&format!("{ind}const {} = {r}.value;", js_name(&b.name)));
+            if is_effect {
+                // §7.4 rule 5: defn! 内のエフェクト呼び出しは Result とは限らない。interp と同じく
+                // Err なら早期 return、束縛値は Ok なら中身、それ以外はそのまま。
+                w.line(&format!(
+                    "{ind}if ({r} !== null && {r}.tag === \"Err\") return {r};"
+                ));
+                if b.name.as_ref() != "_" {
+                    w.line(&format!(
+                        "{ind}const {} = ({r} !== null && {r}.tag === \"Ok\") ? {r}.value : {r};",
+                        js_name(&b.name)
+                    ));
+                }
+            } else {
+                w.line(&format!("{ind}if ({r}.tag === \"Err\") return {r};"));
+                if b.name.as_ref() != "_" {
+                    w.line(&format!("{ind}const {} = {r}.value;", js_name(&b.name)));
+                }
             }
         }
         self.stmt(body, ind, w);
@@ -888,6 +1079,18 @@ impl<'a> Gen<'a> {
     }
 
     fn expr(&mut self, e: &Core, ind: &str, w: &mut JsWriter) {
+        // async 文脈（defn! 本体やエフェクトを含む lam）では呼び出し結果が Promise になりうるので
+        // await で包む（§12.4 の `await host.name(args)` と同じ扱い）。非同期でない値への await は恒等。
+        if self.in_async && matches!(e, Core::App { .. } | Core::EffectCall { .. }) {
+            w.write("(await ");
+            self.expr_inner(e, ind, w);
+            w.write(")");
+            return;
+        }
+        self.expr_inner(e, ind, w);
+    }
+
+    fn expr_inner(&mut self, e: &Core, ind: &str, w: &mut JsWriter) {
         w.map_at(e.span(), None);
         match e {
             Core::Lit { value, .. } => w.write(&lit_js(value)),
@@ -900,9 +1103,14 @@ impl<'a> Gen<'a> {
                 params, body, ..
             } => {
                 let params_js = params.iter().map(|p| js_name(&p.name)).collect::<Vec<_>>().join(", ");
-                w.write(&format!("(({params_js}) => {{\n"));
+                let lam_async = core_has_effect_call(body) || core_calls_impure(body, &self.impure_defs);
+                let async_kw = if lam_async { "async " } else { "" };
+                w.write(&format!("({async_kw}({params_js}) => {{\n"));
                 let saved = self.cur_tail.take();
+                let saved_async = self.in_async;
+                self.in_async = lam_async;
                 self.stmt(body, &format!("{ind}  "), w);
+                self.in_async = saved_async;
                 self.cur_tail = saved;
                 w.write(&format!("{ind}}})"));
             }
@@ -953,11 +1161,19 @@ impl<'a> Gen<'a> {
             Core::Let {
                 name, rhs, body, ..
             } => {
-                w.write(&format!("(({}) => {{\n", js_name(name)));
-                self.stmt(body, &format!("{ind}  "), w);
-                w.write(&format!("{ind}}})("));
-                self.expr(rhs, ind, w);
-                w.write(")");
+                if self.in_async {
+                    w.write(&format!("(await (async ({}) => {{\n", js_name(name)));
+                    self.stmt(body, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})("));
+                    self.expr(rhs, ind, w);
+                    w.write("))");
+                } else {
+                    w.write(&format!("(({}) => {{\n", js_name(name)));
+                    self.stmt(body, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})("));
+                    self.expr(rhs, ind, w);
+                    w.write(")");
+                }
             }
             Core::If {
                 cond,
@@ -975,13 +1191,23 @@ impl<'a> Gen<'a> {
             }
             Core::Match { .. } => {
                 let s = format!("$s{}", self.fresh());
-                w.write(&format!("(({s}) => {{\n"));
-                self.match_tail(e, &format!("{ind}  "), w, Some(&s));
-                w.write(&format!("{ind}}})("));
-                if let Core::Match { scrutinee, .. } = e {
-                    self.expr(scrutinee, ind, w);
+                if self.in_async {
+                    w.write(&format!("(await (async ({s}) => {{\n"));
+                    self.match_tail(e, &format!("{ind}  "), w, Some(&s));
+                    w.write(&format!("{ind}}})("));
+                    if let Core::Match { scrutinee, .. } = e {
+                        self.expr(scrutinee, ind, w);
+                    }
+                    w.write("))");
+                } else {
+                    w.write(&format!("(({s}) => {{\n"));
+                    self.match_tail(e, &format!("{ind}  "), w, Some(&s));
+                    w.write(&format!("{ind}}})("));
+                    if let Core::Match { scrutinee, .. } = e {
+                        self.expr(scrutinee, ind, w);
+                    }
+                    w.write(")");
                 }
-                w.write(")");
             }
             Core::Obj { fields, .. } => {
                 w.write("{ ");
@@ -1000,16 +1226,42 @@ impl<'a> Gen<'a> {
                 w.write(&format!(").{}", js_name(name)));
             }
             Core::Do { .. } => {
-                w.write("(() => {\n");
-                self.do_stmt(e, &format!("{ind}  "), w);
-                w.write(&format!("{ind}}})()"));
+                if self.in_async {
+                    w.write("(await (async () => {\n");
+                    self.do_stmt(e, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})())"));
+                } else {
+                    w.write("(() => {\n");
+                    self.do_stmt(e, &format!("{ind}  "), w);
+                    w.write(&format!("{ind}}})()"));
+                }
             }
-            Core::EffectCall { effect, .. } => {
-                w.write(&format!(
-                    "(() => {{ throw new Error({}); }})()",
-                    serde_json::to_string(&format!("エフェクト {effect}! は P0 では実行できません"))
+            Core::EffectCall { effect, args, .. } => {
+                if self.in_async {
+                    // §12.4: EffectCall -> `await host.name(args)`（host は囲む defn! の第1引数 §12.6）。
+                    // 外側の expr ラッパが (await ...) で包む。
+                    let h = self
+                        .host_stack
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| "host".to_string());
+                    w.write(&format!("{h}{}(", effect_prop(effect)));
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            w.write(", ");
+                        }
+                        self.expr(a, ind, w);
+                    }
+                    w.write(")");
+                } else {
+                    w.write(&format!(
+                        "(() => {{ throw new Error({}); }})()",
+                        serde_json::to_string(&format!(
+                            "エフェクト {effect}! は defn! 本体の外では実行できません"
+                        ))
                         .unwrap_or_else(|_| "\"effect\"".to_string())
-                ));
+                    ));
+                }
             }
             Core::Error { message, .. } => {
                 w.write(&format!(
@@ -1037,6 +1289,7 @@ mod tests {
             file: "test.js".to_string(),
             source_file: "test.lts".to_string(),
             type_names: BTreeSet::new(),
+            impure_names: BTreeSet::new(),
         })
     }
 
@@ -1073,12 +1326,34 @@ mod tests {
     }
 
     #[test]
-    fn defn_bang_is_unsupported_in_p0() {
-        let r = emit_src("(effect log : (fn (s : string) : nil))\n(defn! f (s : string) : nil (log! s))");
-        let errs = r.expect_err("defn! はエラーのはず");
-        assert!(errs
-            .iter()
-            .any(|d| d.kind == DiagKind::UnsupportedInP0 && d.message.contains("defn!")));
+    fn defn_bang_emits_async_function_with_host_call() {
+        let out = emit_src(
+            "(effect log : (fn (s : string) : nil))\n(defn! f (host : (obj (log : (fn (s : string) : nil)))) (s : string) : nil (log! s))",
+        )
+        .expect("defn! は P1 で生成できる");
+        assert!(out.js.contains("async function f(host, s)"), "{}", out.js);
+        assert!(out.js.contains("(await host.log(s))"), "{}", out.js);
+    }
+
+    #[test]
+    fn defn_bang_example_is_awaited_and_kebab_effect_uses_snake_case_key() {
+        let out = emit_src(
+            "(effect db-write : (fn (s : string) : nil))\n(defn! f (host : (obj (db-write : (fn (s : string) : nil)))) : nil (db-write! \"x\"))\n(example (f (obj (db-write (fn (s : string) : nil nil)))) => nil)",
+        )
+        .expect("emit");
+        assert!(out.js.contains("(await host.db_write(\"x\"))"), "{}", out.js);
+        assert!(out.js.contains("const actual = (await f("), "{}", out.js);
+    }
+
+    #[test]
+    fn pure_module_has_no_async_anywhere() {
+        let out = emit_src(
+            "(defn add-money (a : number) : number (+ a 1))\n(example (add-money 1) => 2)",
+        )
+        .expect("emit");
+        assert!(!out.js.contains("async"), "{}", out.js);
+        assert!(!out.js.contains("await"), "{}", out.js);
+        assert!(out.js.contains("const actual = add_money(1);"), "{}", out.js);
     }
 
     #[test]
@@ -1091,5 +1366,36 @@ mod tests {
         let map_json: serde_json::Value = serde_json::from_str(&a.map).expect("map json");
         assert_eq!(map_json["version"], 3);
         assert_eq!(map_json["sources"], serde_json::json!(["test.lts"]));
+    }
+
+    #[test]
+    fn option_and_split_stdlib_lowering_is_raw_and_scalar_based() {
+        let out = emit_src(
+            "(defn f (arr : (Array number)) : (Option number) (find arr (fn (x : number) : bool (> x 0))))\n(defn g (arr : (Array number)) (i : number) : (Option number) (nth arr i))\n(defn h (s : string) (t : string) : (Array string) (split s t))",
+        )
+        .expect("emit");
+        assert!(out.js.contains("? arr[k] : null"), "{}", out.js);
+        assert!(!out.js.contains("{ok}(arr[k])"), "{}", out.js);
+        assert!(out.js.contains("if (f(x)) return x; return null;"), "{}", out.js);
+        assert!(out.js.contains("t === \"\" ? [...s] : s.split(t)"), "{}", out.js);
+    }
+
+    #[test]
+    fn decimal_literals_lower_to_bigint_and_helpers_are_emitted() {
+        let out = emit_src(
+            "(defn f (a : decimal) (b : decimal) : decimal (* a b))\n(example (f 1.50d 2.00d) => 3.00d)",
+        )
+        .expect("emit");
+        assert!(out.js.contains("1500000000000000000n"), "{}", out.js);
+        assert!(out.js.contains("$dec_mul"), "{}", out.js);
+        assert!(out.js.contains("$json(actual)"), "{}", out.js);
+    }
+
+    #[test]
+    fn pure_number_module_has_no_decimal_helpers() {
+        let out = emit_src("(defn add (a : number) (b : number) : number (+ a b))\n(example (add 1 2) => 3)").expect("emit");
+        assert!(!out.js.contains("$dec_mul"), "{}", out.js);
+        assert!(!out.js.contains("bigint"), "{}", out.js);
+        assert!(out.js.contains("const $stdlib_add = (a, b) => a + b;"), "{}", out.js);
     }
 }

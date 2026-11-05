@@ -22,7 +22,7 @@ const RESERVED: &[&str] = &[
     "type", "effect", "prop", "forall", "example", "import", "export", "Array", "union",
     "Result", "Option",
 ];
-const PRIMS: &[&str] = &["number", "string", "bool"];
+const PRIMS: &[&str] = &["number", "string", "bool", "decimal"];
 const OPERATORS: &[&str] = &["+", "-", "*", "/", "<", ">", "<=", ">=", "="];
 
 fn is_reserved(text: &str) -> bool {
@@ -40,6 +40,8 @@ struct ListRaw<'a> {
     close: Option<&'a Token>,
     span: Span,
     trivia: Trivia,
+    /// `[` で開いたか（do の束縛は `[...]` のみ。`(...)` は式）
+    bracket: bool,
 }
 
 fn as_atom<'a>(r: &Raw<'a>) -> Option<&'a Token> {
@@ -315,6 +317,7 @@ impl<'a> Parser<'a> {
             close,
             span,
             trivia: open.trivia.clone(),
+            bracket: open.kind == TokenKind::OpenBracket,
         })
     }
 
@@ -818,6 +821,7 @@ impl<'a> Parser<'a> {
                     if PRIMS.contains(&&*t.text) {
                         let name = match &*t.text {
                             "number" => Prim::Number,
+                            "decimal" => Prim::Dec,
                             "string" => Prim::Str,
                             "bool" => Prim::Bool,
                             _ => Prim::Nil,
@@ -1229,6 +1233,17 @@ impl<'a> Parser<'a> {
                     span: t.span.clone(),
                 }
             }
+            TokenKind::Dec => {
+                let v = match &t.value {
+                    Some(TokenValue::Dec(s)) => s.clone(),
+                    _ => Rc::from("0"),
+                };
+                Expr::Lit {
+                    value: LitValue::Dec(v),
+                    trivia: t.trivia.clone(),
+                    span: t.span.clone(),
+                }
+            }
             TokenKind::Str => {
                 let s = match &t.value {
                     Some(TokenValue::Str(s)) => Rc::from(s.as_str()),
@@ -1555,20 +1570,17 @@ impl<'a> Parser<'a> {
                 }
                 let mut binds: Vec<DoBind> = Vec::new();
                 for (i, b) in args[..args.len() - 1].iter().enumerate() {
-                    let bl = match b {
-                        Raw::List(l) if l.items.len() == 2 => l,
-                        _ => {
-                            self.error(
-                                self.raw_span_of(b),
-                                "do > bind は [name expr] >形です（'_' も可）".to_string(),
-                                None,
-                                None,
-                            );
-                            continue;
-                        }
+                    let bind_path = format!("{path}.binds.{i}");
+                    // do-io (P1, §3.5): [name expr] 以外の要素は名前なし束縛として `_` に糖衣する
+                    let named = match b {
+                        Raw::List(l) if l.bracket && l.items.len() == 2 => match as_atom(&l.items[0]) {
+                            Some(t) if is_symbol_tok(t) => Some((l, t)),
+                            _ => None,
+                        },
+                        _ => None,
                     };
-                    match as_atom(&bl.items[0]) {
-                        Some(t) if is_symbol_tok(t) => {
+                    match named {
+                        Some((bl, t)) => {
                             if is_reserved(&t.text) {
                                 self.error(
                                     t.span.clone(),
@@ -1577,7 +1589,7 @@ impl<'a> Parser<'a> {
                                     None,
                                 );
                             }
-                            let expr = self.build_expr(&bl.items[1], &format!("{path}.binds.{i}"));
+                            let expr = self.build_expr(&bl.items[1], &bind_path);
                             binds.push(DoBind {
                                 name: t.text.clone(),
                                 expr: Box::new(expr),
@@ -1585,13 +1597,14 @@ impl<'a> Parser<'a> {
                                 span: bl.span.clone(),
                             });
                         }
-                        _ => {
-                            self.error(
-                                self.raw_span_of(b),
-                                "do > bind は [name expr] >形です（'_' も可）".to_string(),
-                                None,
-                                None,
-                            );
+                        None => {
+                            let expr = self.build_expr(b, &bind_path);
+                            binds.push(DoBind {
+                                name: Rc::from("_"),
+                                expr: Box::new(expr),
+                                trivia: Trivia::default(),
+                                span: self.raw_span_of(b),
+                            });
                         }
                     }
                 }
@@ -2104,6 +2117,23 @@ mod tests {
                 "reserved word {w} should be a parse-error"
             );
         }
+    }
+
+    #[test]
+    fn do_io_bare_exprs_become_underscore_binds() {
+        // do-io (P1, §3.5): (do e1 e2 ...) の名前なし要素は `_` 束縛になる
+        let (p, diags) = parse_src("(defn f () : number (do (g 1) [v (h 2)] (+ v 1)))");
+        assert!(diags.is_empty(), "{diags:?}");
+        let crate::ast::TopForm::Defn { body, .. } = &p.forms[0] else {
+            panic!()
+        };
+        let crate::ast::Expr::Do { binds, body, .. } = body.as_ref() else {
+            panic!("do expected")
+        };
+        assert_eq!(binds.len(), 2);
+        assert_eq!(binds[0].name.as_ref(), "_");
+        assert_eq!(binds[1].name.as_ref(), "v");
+        assert!(matches!(body.as_ref(), crate::ast::Expr::App { .. }));
     }
 
     #[test]

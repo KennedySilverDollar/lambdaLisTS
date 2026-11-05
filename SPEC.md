@@ -56,6 +56,9 @@ Scope: Pure core + Result + minimal effects checking
 | 1 | 数値は IEEE754 f64（JS準拠）のまま確定 | §8.6（確定を明記）、§14（P5 で i64/i53 を再検討） |
 | 2 | 循環構造上の `=` は循環検出による実行時エラー | §8.3「循環構造における構造的等価」、§8.6、§12.5 |
 | 3 | §8.6 の実行時エラー定義をバックエンド中立化（対応は表で規定） | §8.6。T8 の source map 検証は JS バックエンドにおける具体例として維持 |
+| 4 | `(union T nil)`（`Option T`）の実行時表現は生値 T（Ok/Err で包まない）。`find`/`nth` の成功は T、失敗は `nil` | §11.6 |
+| 5 | `split` の空区切りは Unicode スカラ値（char）を1要素とし、空文字列要素を生じない | §11.6 |
+| 6 | decimal 型（固定小数点 SCALE=18・`d` 接尾辞リテラル・同型のみ演算子多重定義・to-dec/to-num・half-away丸め・SCALE桁印字・バックエンド中立エラー） | §8.6, §11.1, §11.6, §12.4 |
 
 併せて、stdlib 5件と印字規約の規範所在（§11.6・付録C #10/#11 を規範とし JS 側を修正）も本追補に含める。§11.6 では各項目を明確化した:min/max の NaN・±0・±Infinity（同値なら第2引数を返す）規則、len/str-slice のコードポイント単位（サロゲートペアは 1）、slice/str-slice と nth の小数の 0 方向切り捨て、`str` の数値表記（整数値に `.0` 無し・指数表記は展開）と文字列の無引用・無エスケープ印字、および REPL 印字への適用。
 
@@ -91,7 +94,8 @@ bracket    ::= '[' | ']'
 brace      ::= '{' | '}'                       ; 予約（P0では未使用）
 punct      ::= '<=' | '>=' | '=>' | '->'
             | ':' | '+' | '-' | '*' | '/' | '<' | '>' | '='
-atom       ::= number | string | keyword | symbol | dotted-symbol | nil | bool
+atom       ::= number | decimal | string | keyword | symbol | dotted-symbol | nil | bool
+decimal    ::= number 'd'                          ; 例: 1.50d（既存の 1.5 は number のまま）
 ```
 
 字象の規則：
@@ -161,7 +165,7 @@ top-form  ::= import | export | type-def | effect-def | defn | defn! | prop | ex
 ### 3.3 型構文
 
 ```bnf
-type   ::= 'number' | 'string' | 'bool' | 'nil'
+type   ::= 'number' | 'string' | 'bool' | 'nil' | 'decimal'
          | symbol                                    ; 型エイリアス
          | '(' 'Array' type ')'
          | '(' 'union' type+ ')'
@@ -556,6 +560,7 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 ### 8.6 数値と実行時エラー
 
 - **number は IEEE754 倍精度浮動小数点数（f64。JS準拠）であり、この単一の数値表現で確定する（v0.2追補 §0.3、MUST）**。Rust 側 `f64` は IEEE754 binary64 であり、JS と**同一の演算結果**を与える。リテラルは正しく丸められた 10進→binary64 変換で値が決まる（オーバーフローは ±Infinity）。すべての算術・比較は IEEE754 の例外なき演算に従い（`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN）、NaN・±Infinity も number 値である。2^53 を超える整数値の丸めは仕様上の値であり、`=` では NaN は NaN と等しくない（§8.3）。decimal は P1。整数型（i64/i53）への変更は §14 に従い P5（ネイティブAOT）で性能要件が発生した場合に再検討する。
+- **decimal は固定小数点（SCALE=18 固定）**（P1/M23、design/decimal.md、MUST）: 実行時の値はスケール済み整数 s（実値 = s / 10^18）であり、Rust では i128、JS では BigInt、WASM では i128 で表され、**全バックエンドでビット一致**する。表現可能な範囲は |s| ≤ i128::MAX（実値で約 ±1.7e20）。リテラルは `1.50d`（number の直後に接尾辞 `d`）。`+ - * / < <= > >=` は「両引数が decimal」のとき decimal/bool を返し（両 number なら従来どおり）、混在は type-mismatch（暗黙変換はしない。明示変換は `to-dec` / `to-num` のみ）。`=` はスケール済み整数の等価。丸めは round-half-away-from-zero（trunc 除算 + 剰余の 2r ≥ d 判定）で全バックエンド一致。`/` の 0 除算は実行時エラー `decimal-division-by-zero`、範囲超過は `decimal-overflow`（number の `(/ 1 0)=Infinity` とは異なる）。
 - **P0（純粋関数のみ）における「実行時エラー」とは、プログラムの実行が継続できない意味論上の事態であり、各バックエンドの実行環境が報告する回復不可能な失敗として観測される（MUST）。バックエンドごとの対応は次表で規定する。例外の型名・メッセージ・スタック表現はバックエンド固有であり規範外とする。**
 
 | バックエンド | 実行時エラーとして観測されるもの |
@@ -565,6 +570,7 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 
 .lts 行への対応付けは source map が担う。**T8 の source map 検証は、JS バックエンドにおける実行時エラーの具体例である。**
 - **循環構造を含む値に対する `=` は、循環を検出した時点で実行時エラーとする（§8.3、MUST）**。
+- decimal の実行時エラーはバックエンド中立に同一の名前で報告される（MUST）: `decimal-division-by-zero`（decimal の 0 除算）、`decimal-overflow`（表現範囲超過）。
 
 ---
 
@@ -675,14 +681,14 @@ JSON 直列化は serde_json とする（`Map` はデフォルトでキーソー
 {"id": 2, "ok": true, "results": [{"example": "place-order空カート", "pass": true}]}
 {"id": 2, "ok": false, "failures": [{"example": "...", "actual": "…", "expected": "…"}]}
 {"id": 5, "ok": true, "type": "(fn (number number) : number)"}
-{"id": 3, "ok": false, "errors": [{"kind": "unsupported-in-p0", "message": "prop評価はP1で実装"}]}
+{"id": 3, "ok": false, "errors": [{"kind": "unbound-symbol", "message": "prop が見つかりません: 'add-money commutative'"}]}
 ```
 
 op と意味：
 
 - `eval`：src をパース・検査・評価し、定義名と型を返す。診断がある場合は `ok: false` + `errors`。
 - `test`：ロード済みの全 `example` を評価し、期待値と構造的等価で比較、結果リストを返す。
-- `prop`：P0 では受理するが評価せず unsupported-in-p0 エラーを返す（P1 で反例・縮小を実装）。
+- `prop`: 指定した名前の prop を実評価する（P1）。リクエストに `"seed"`（u64）を含められるほか、CLI に `lists repl --seed <u64>` がある。既定シードはドキュメント化された定数（`DEFAULT_SEED`）で、乱数は自前の決定的 PRNG（splitmix64。外部乱数ライブラリ・システム時刻は使わない）のみを使う。**同じシードなら同じ生成列・同じ反例が得られる（MUST）**。成功時は `{"ok": true, "prop": name, "seed": s, "trials": n}`、失敗時は `{"ok": false, "prop": name, "seed": s, "trials": k, "counterexample": {param: value}, "shrunk": {param: value}, "fix": {...}}` を返す。prop が未定義なら `unbound-symbol` エラー。forall パラメータは生成可能な型（関数型・型変数は不可）でなければならない。
 - `reload`：ファイルを再読込し、依存も再検査する。
 - `type-of`：src の型を正規表示（§6.2）で返す。
 - `quit`：終了。
@@ -743,7 +749,9 @@ lists repl                                 # JSON Lines REPL
 
 | 名前 | 型 |
 |---|---|
-| `+` `-` `*` `/` | `(fn (number number) : number)`（2引数固定。可変長はP1で検討） |
+| `+` `-` `*` `/` | `(fn (number number) : number)`。P1 以降は両引数が decimal なら decimal（混在は type-mismatch） |
+| `<` `>` `<=` `>=` | `(fn (number number) : bool)`。両引数が decimal なら bool |
+| `to-dec` / `to-num` | `(fn (number) : decimal)` / `(fn (decimal) : number)`。number と decimal の**唯一の**明示変換（暗黙変換なし） |
 | `<` `>` `<=` `>=` | `(fn (number number) : bool)` |
 | `=` | `(fn (T T) : bool)` 構造的等価 |
 | `mod` `min` `max` | `(fn (number number) : number)`、`abs` は `(fn (number) : number)` |
@@ -802,13 +810,16 @@ P0 の標準ライブラリはすべて純粋関数であり、**その意味論
 - `min` / `max`（MUST）: 片方が NaN なら NaN でない他方を返す（両方 NaN なら NaN）。それ以外は `min(a, b)` は `a < b` なら `a`、そうでなければ `b` を返し、`max(a, b)` は `a > b` なら `a`、そうでなければ `b` を返す。すなわち同値（±0 を含む）のときは第 2 引数が返る。±Infinity は通常の大小比較で扱う。この規則は Rust 実装の `f64::min`/`f64::max` と同一の結果を与える（差分テストで検証済み）
 - `len`:文字列の長さは **Unicode スカラ値（char）の数**であり、UTF-16 コード単位数ではない（MUST）。例: `"😀"` は UTF-16 では 2 コード単位だが `len` は 1。
 - `str-slice` / `slice`:文字列は char 単位、配列は要素単位で半開区間 `[start, end)` を切り出す。境界規則（`slice_bounds` と呼ぶ）:start/end が NaN ならばそれぞれ 0 / len とする。負の値は `len + x` として 0 にクランプし、正の値は len にクランプする。end < start ならば空とする。start/end が小数の場合は 0 方向へ切り捨ててから上記の境界処理を行う（MUST）。
-- `nth`:添字 `i` が 0 以上で配列長未満のとき `ok(arr[trunc(i)])`、さもなくば `nil`（MUST）。小数添字は 0 方向へ切り捨てる（`1.9` は `1`）。`nth` は配列のみを対象とし（§11.3）、文字列の部分取得は `str-slice` で行う（その start/end も同じ切り捨て規則に従う）。
+- `nth`:添字 `i` が 0 以上で配列長未満のとき `arr[trunc(i)]`（生値。下記の「(union T nil) の実行時表現」を参照）、さもなくば `nil`（MUST）。小数添字は 0 方向へ切り捨てる（`1.9` は `1`）。`nth` は配列のみを対象とし（§11.3）、文字列の部分取得は `str-slice` で行う（その start/end も同じ切り捨て規則に従う）。
+- `(union T nil)`（`Option T`）の**実行時表現**（MUST）: 生値 T として表現し、Ok/Err で包まない。`nil` は Nil。`find` / `nth` の成功は T、失敗は `nil`。
+- `split`: 区切り文字列が空のとき、各 **Unicode スカラ値（char）を1要素**とし、**空文字列要素を生じない**（MUST）。例: `split("a😀b", "")` は `["a" "😀" "b"]`、`split("", "")` は `[]`。区切りが非空のときは従来どおりの部分文字列分割。
 - `str`（印字規約）:値 → 文字列の規則は次のとおり（MUST）。付録C #10 の `print_value` が規範的写像である。
   - `nil` → `nil`、`bool` → `true` / `false`、`string` → そのまま印字する（引用符・エスケープを付けない。改行や `"` を含む文字列も生のまま）
   - `number` → NaN は `NaN`、±Infinity は `Infinity` / `-Infinity`、-0 は `-0`、それ以外は **最短往復10進表記で指数表記を用いない**（例:`1` → `1`、`0.1` → `0.1`、`1e21` → `1000000000000000000000`、`1e-7` → `0.0000001`）。整数値の浮動小数点にも `.0` は付かない（`1.0` → `1`）
   - 配列 → `[a b c]`（空白区切り）、オブジェクト → `{k: v, ...}`（キーは UTF-8 バイト順（コードポイント順）にソート）、Result → `(ok v)` / `(err v)`、関数 → `<fn>`
   - （JS バックエンドの注意:Result は `{tag, value}` 形状に lowering されるため、`tag` と `value` の2キーのみを持つ obj と印字上区別できない。P0 の型検査では両者を `=` で比較することはできない）
 - 印字の適用範囲: `str` による変換に加え、REPL の結果印字（`actual` / `expected`）も同じ `print_value` 規約に従う（MUST）。診断は値を直接印字せず span と kind で示し、値を示す場合もこの規約に従う。
+- `decimal` → 小数点以下ちょうど SCALE(18) 桁の平書き（例: `1.50d` → `1.500000000000000000`、`-0.25d` → `-0.250000000000000000`）。指数表記は使わない（MUST）
 
 ---
 
@@ -847,6 +858,7 @@ P0 の標準ライブラリはすべて純粋関数であり、**その意味論
 | Field | `obj.name` |
 | Do | 早期リターン（`if (r.tag === "Err") return r;`） |
 | EffectCall | `await host.name(args)`（P1） |
+| Lit(decimal) | BigInt のスケール済み整数リテラル（例: `1.50d` → `1500000000000000000n`）。算術は `$dec_*` ヘルパ（BigInt、interp の i128 とビット一致） |
 
 ### 12.5 runtime.js
 
@@ -888,7 +900,7 @@ const host = {
 - **T6. エフェクト違反（検査のみ）** — 付録B effects.lts の `pure-run` 内 `log!` が effect-violation エラーと `defn!` への fix パッチを返す。
 - **T7. 差分一致** — T1–T6 すべてで、Rust インタープリタと JS バックエンドの出力が構造的に一致。
 - **T8. source map** — JS実行時エラー（深い再帰によるスタックオーバーフロー等）のスタックトレースが .lts の該当行を指す。
-- **T9. REPL JSON** — eval / test / type-of のJSON入出力が仕様通りに動作。prop は unsupported エラーを返す。
+- **T9. REPL JSON** — eval / test / type-of のJSON入出力が仕様通りに動作。prop は unsupported エラーを返す。（追記 M22: P1 では prop op は実評価されます。§10.1 参照）
 
 （v0.1 の「prop の反例と縮小」は P1 受入へ繰延。）
 
@@ -898,7 +910,7 @@ const host = {
 
 | フェーズ | 追加機能 | 変更点 |
 |---|---|---|
-| P1 | defn! 完全実装、effect、do-io、decimal、**prop評価（反例生成・縮小、fast-check相当）** | host DI、モックhost |
+| P1 | defn! 完全実装、effect、do-io、decimal、**prop評価（反例生成・縮小、fast-check相当）** | host DI、モックhost |（decimal は M23 で実装済み）
 | P2 | condition system（制限付き）、restart-case、handle、`!throws` | コールバック方式、REPLデバッガ |
 | P3 | 増分コンパイル、LSP、ジェネリクス本格化（ユーザー型変数）、FFI標準 | 関数単位キャッシュ |
 | P4 | WASMバックエンド（GC + Stack Switching）、完全なリスタート | サンドボックス、決定性 |

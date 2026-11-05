@@ -147,6 +147,7 @@ fn t5_broken_lts_recovery() {
         file: "broken.js".to_string(),
         source_file: "broken.lts".to_string(),
         type_names: BTreeSet::new(),
+        impure_names: BTreeSet::new(),
     });
     let errs = r.expect_err("broken は emit エラーのはず");
     assert!(errs.iter().any(|d| d.kind == DiagKind::ParseError));

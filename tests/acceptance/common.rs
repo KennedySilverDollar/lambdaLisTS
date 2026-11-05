@@ -171,6 +171,13 @@ pub fn json_to_value(v: &Json) -> Value {
                 if tag == "Err" {
                     return Value::Err(Box::new(json_to_value(val)));
                 }
+                if tag == "Dec" {
+                    if let Json::String(s) = val {
+                        return Value::Dec(
+                            lists::decimal::parse_dec_scientific(s).unwrap_or(0),
+                        );
+                    }
+                }
             }
             Value::Obj(
                 m.iter()

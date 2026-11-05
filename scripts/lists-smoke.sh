@@ -132,5 +132,42 @@ fi
 [ "$code" -eq 0 ] && [ "$n_ok" -eq 70 ]
 check 20 "stdlib-edge.lts: 70/70 examples ok in node" $? "compile code=$code ok=$n_ok"
 
-echo "SMOKE: $pass/20"
+# S21: defn! がモック host で動き、呼び出しが host-log に記録される（M21, host DI）
+printf '%s\n' \
+  '{"id":1,"op":"eval","src":"(effect log : (fn (s : string) : nil))\n(defn! f (host : (obj (log : (fn (s : string) : nil)))) (s : string) : nil (log! s))"}' \
+  '{"id":2,"op":"eval","src":"(example (f host \"smoke\") => nil)"}' \
+  '{"id":3,"op":"test"}' \
+  '{"id":4,"op":"host-log"}' \
+  '{"id":5,"op":"quit"}' | $BIN repl --host mock > "$TMP/s21.txt" 2>&1; code=$?
+n_pass=$(grep -c '"pass":true' "$TMP/s21.txt" || true)
+n_rec=$(grep -c '"effect":"log"' "$TMP/s21.txt" || true)
+[ "$code" -eq 0 ] && [ "$n_pass" -ge 1 ] && [ "$n_rec" -ge 1 ]
+check 21 "repl --host mock: defn! example pass + host-log に呼び出し記録" $? "code=$code pass=$n_pass rec=$n_rec out=$(head -c 200 "$TMP/s21.txt")"
+
+# S22: REPL prop — money.lts の prop がシード付きで 100試行 pass（M22）
+printf '%s\n' \
+  '{"id":1,"op":"reload","file":"tests/fixtures/money.lts"}' \
+  '{"id":2,"op":"prop","name":"add-money commutative","seed":42}' \
+  '{"id":3,"op":"quit"}' | $BIN repl > "$TMP/s22.txt" 2>&1; code=$?
+[ "$code" -eq 0 ] && grep -q '"ok":true' "$TMP/s22.txt" && grep -q '"trials":100' "$TMP/s22.txt" && grep -q '"seed":42' "$TMP/s22.txt"
+check 22 "repl prop: money.lts の prop が seed=42・100試行で pass" $? "code=$code out=$(head -c 200 "$TMP/s22.txt")"
+
+# S23: 偽 prop — 反例・縮小・シードが機械可読 JSON で返る（M22）
+printf '%s\n' \
+  '{"id":1,"op":"eval","src":"(prop \"neg\" (forall [(x : number)] (< x 0)))"}' \
+  '{"id":2,"op":"prop","name":"neg","seed":7}' \
+  '{"id":3,"op":"quit"}' | $BIN repl > "$TMP/s23.txt" 2>&1; code=$?
+[ "$code" -eq 0 ] && grep -q '"ok":false' "$TMP/s23.txt" && grep -q '"counterexample"' "$TMP/s23.txt" && grep -qE '"shrunk":\{"x":0(\.0)?\}' "$TMP/s23.txt" && grep -q '"seed":7' "$TMP/s23.txt"
+check 23 "repl prop: 偽 prop に反例・縮小(x=0)・シードが機械可読で返る" $? "code=$code out=$(head -c 240 "$TMP/s23.txt")"
+
+# S24: decimal — compile+node で全 example が通り、印字は SCALE 桁固定の平書き（M23）
+out=$($BIN compile $F/decimal-edge.lts --out "$TMP/o24"); code=$?
+n_ok=0
+if [ "$code" -eq 0 ]; then
+  node "$TMP/o24/decimal-edge.js" > "$TMP/n24.txt" 2>&1 && n_ok=$(grep -c ': ok' "$TMP/n24.txt" || true)
+fi
+[ "$code" -eq 0 ] && [ "$n_ok" -eq 18 ] && grep -q '"tag":"Dec","value":"3.750000000000000000"' "$TMP/n24.txt"
+check 24 "decimal-edge.lts: 18/18 ok in node（BigInt lowering・SCALE桁印字）" $? "code=$code ok=$n_ok out=$(head -c 200 "$TMP/n24.txt")"
+
+echo "SMOKE: $pass/$((pass+fail))"
 [ "$fail" -eq 0 ]

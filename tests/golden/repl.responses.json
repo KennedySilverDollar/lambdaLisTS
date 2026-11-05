@@ -13,8 +13,8 @@
   {
     "errors": [
       {
-        "kind": "unsupported-in-p0",
-        "message": "prop評価はP1で実装"
+        "kind": "unbound-symbol",
+        "message": "prop が見つかりません: 'add-money commutative'"
       }
     ],
     "id": 3,

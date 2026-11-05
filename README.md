@@ -171,7 +171,7 @@ op の意味:
 
 ## P0 >制限
 
-- `defn!`（エフェクト関数）は検査のみ受理します。JS 生成時は `unsupported-in-p0` エラー、インタプリタでの effect 呼び出しの実行もエラーです（P1、§7.5）
+- `defn!`（エフェクト関数）は P1 で完全実装済みです。host を第1引数に取り、JS では `async function` + `await host.<effect>(args)` に生成され（§12.4/§12.6）、インタープリタでも host 経由で実行されます。純粋 `defn` からの effect 呼び出し・`defn!` 呼び出しは `effect-violation`（§7.2/§7.4）
 - `prop` >評価（反例生成・縮小）は P1。構文と型検査のみ行います
 - 末尾呼び出し（末尾位置の `App`）は **proper tail call** で、インタプリタ・JS の両方で定数スタックで実行されます（M12、§8.5 MUST。JS では 10^8 回の末尾再帰も成功）。非末尾再帰の深さ上限は実装依存のままです（実測値は docs/README.md に記載。インタプリタは `MAX_CALL_DEPTH = 10000`、`src/eval.rs` で超過時にパニックせず `internal-error` を返します）
 

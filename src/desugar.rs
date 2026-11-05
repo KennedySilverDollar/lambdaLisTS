@@ -85,6 +85,7 @@ impl CoreDef {
 fn lit_value(v: &LitValue) -> Value {
     match v {
         LitValue::Num(n) => Value::Num(*n),
+        LitValue::Dec(text) => Value::Dec(crate::decimal::parse_dec_scientific(text).unwrap_or(0)),
         LitValue::Str(s) => Value::Str(s.clone()),
         LitValue::Bool(b) => Value::Bool(*b),
         LitValue::Nil => Value::Nil,
@@ -95,6 +96,7 @@ fn lit_value(v: &LitValue) -> Value {
 struct Desugarer {
     diagnostics: Vec<Diagnostic>,
     fresh: usize,
+    host: Option<Rc<str>>,
 }
 
 impl Desugarer {
@@ -183,21 +185,31 @@ impl Desugarer {
                 body,
                 span,
                 ..
-            } => CoreDef::Defn {
-                name: name.clone(),
-                params: params
+            } => {
+                let params_c: Vec<Param> = params
                     .iter()
                     .enumerate()
                     .map(|(i, p)| {
                         self.param(p, &ast_path(path, &["params", i.to_string().as_str()]))
                     })
-                    .collect(),
-                ret: self.type_(ret, &ast_path(path, &["ret"])),
-                body: self.expr(body, &ast_path(path, &["body"])),
-                pure: !effectful,
-                span: span.clone(),
-                path: path.to_string(),
-            },
+                    .collect();
+                let ret_c = self.type_(ret, &ast_path(path, &["ret"]));
+                let saved_host = self.host.take();
+                if *effectful {
+                    self.host = params.first().map(|p| p.name.clone());
+                }
+                let body_c = self.expr(body, &ast_path(path, &["body"]));
+                self.host = saved_host;
+                CoreDef::Defn {
+                    name: name.clone(),
+                    params: params_c,
+                    ret: ret_c,
+                    body: body_c,
+                    pure: !effectful,
+                    span: span.clone(),
+                    path: path.to_string(),
+                }
+            }
             TopForm::Prop {
                 name,
                 params,
@@ -252,6 +264,7 @@ impl Desugarer {
         match t {
             TypeExpr::Prim { name, .. } => match name {
                 Prim::Number => Type::Number,
+                Prim::Dec => Type::Dec,
                 Prim::Str => Type::Str,
                 Prim::Bool => Type::Bool,
                 Prim::Nil => Type::Nil,
@@ -330,6 +343,7 @@ impl Desugarer {
             } => {
                 if *effect {
                     Core::EffectCall {
+                        host: self.host.clone().unwrap_or_default(),
                         effect: Rc::from(name.trim_end_matches('!')),
                         args: Vec::new(),
                         span: span.clone(),
@@ -369,6 +383,7 @@ impl Desugarer {
                     .collect();
                 if *effect {
                     Core::EffectCall {
+                        host: self.host.clone().unwrap_or_default(),
                         effect: Rc::from(name.trim_end_matches('!')),
                         args: args_c,
                         span: span.clone(),
@@ -846,6 +861,16 @@ mod tests {
         assert_eq!(
             body,
             json!({ "EffectCall": {
+                "host": "",
+                "effect": "log",
+                "args": [app(var("str"), vec![var("x")])]
+            }})
+        );
+        let body = norm(&body_of("(defn! f (host : (obj (log : (fn (s : string) : nil)))) (x : number) : nil (log! (str x)))"));
+        assert_eq!(
+            body,
+            json!({ "EffectCall": {
+                "host": "host",
                 "effect": "log",
                 "args": [app(var("str"), vec![var("x")])]
             }})

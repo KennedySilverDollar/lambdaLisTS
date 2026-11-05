@@ -81,6 +81,17 @@ impl Interp {
                 _ => Err(EvalError::Runtime("Array が必要です".to_string())),
             }
         };
+        let num_pair = |args: &[Value]| -> Result<(f64, f64), EvalError> {
+            match (&args[0], &args[1]) {
+                (Value::Num(a), Value::Num(b)) => Ok((*a, *b)),
+                (Value::Dec(_), Value::Dec(_)) => Err(EvalError::Runtime(
+                    "decimal には number 用の演算を適用できません（to-num で変換してください）".to_string(),
+                )),
+                _ => Err(EvalError::Runtime(
+                    "演算の引数は number または decimal の同一型である必要があります".to_string(),
+                )),
+            }
+        };
         let bool_v = |v: &Value| -> Result<bool, EvalError> {
             match v {
                 Value::Bool(b) => Ok(*b),
@@ -89,15 +100,81 @@ impl Interp {
         };
         let ok_v = |v: Value| Value::Ok(Box::new(v));
         let err_v = |v: Value| Value::Err(Box::new(v));
-        match b.kind {
-            BuiltinKind::Add => Ok(Value::Num(num(&args[0])? + num(&args[1])?)),
-            BuiltinKind::Sub => Ok(Value::Num(num(&args[0])? - num(&args[1])?)),
-            BuiltinKind::Mul => Ok(Value::Num(num(&args[0])? * num(&args[1])?)),
-            BuiltinKind::Div => Ok(Value::Num(num(&args[0])? / num(&args[1])?)),
-            BuiltinKind::Lt => Ok(Value::Bool(num(&args[0])? < num(&args[1])?)),
-            BuiltinKind::Gt => Ok(Value::Bool(num(&args[0])? > num(&args[1])?)),
-            BuiltinKind::Le => Ok(Value::Bool(num(&args[0])? <= num(&args[1])?)),
-            BuiltinKind::Ge => Ok(Value::Bool(num(&args[0])? >= num(&args[1])?)),
+        match &b.kind {
+            BuiltinKind::Add => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_add(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a + b))
+            }
+            BuiltinKind::Sub => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_sub(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a - b))
+            }
+            BuiltinKind::Mul => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_mul(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a * b))
+            }
+            BuiltinKind::Div => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Dec(
+                        crate::decimal::dec_div(*a, *b).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    ));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Num(a / b))
+            }
+            BuiltinKind::Lt => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a < b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a < b))
+            }
+            BuiltinKind::Gt => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a > b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a > b))
+            }
+            BuiltinKind::Le => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a <= b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a <= b))
+            }
+            BuiltinKind::Ge => {
+                if let (Value::Dec(a), Value::Dec(b)) = (&args[0], &args[1]) {
+                    return Ok(Value::Bool(a >= b));
+                }
+                let (a, b) = num_pair(&args)?;
+                Ok(Value::Bool(a >= b))
+            }
+            BuiltinKind::ToDec => match &args[0] {
+                Value::Num(n) => Ok(Value::Dec(
+                    crate::decimal::dec_from_num(*n).map_err(|e| EvalError::Runtime(e.to_string()))?,
+                )),
+                _ => Err(EvalError::Runtime("to-dec は number が必要です".to_string())),
+            },
+            BuiltinKind::ToNum => match &args[0] {
+                Value::Dec(s) => Ok(Value::Num(crate::decimal::dec_to_num(*s))),
+                _ => Err(EvalError::Runtime("to-num は decimal が必要です".to_string())),
+            },
             BuiltinKind::Eq => Ok(Value::Bool(
                 structural_equal(&args[0], &args[1]).map_err(|e| EvalError::Runtime(e.to_string()))?,
             )),
@@ -122,18 +199,24 @@ impl Interp {
             BuiltinKind::Len => Ok(Value::Num(str_v(&args[0])?.chars().count() as f64)),
             BuiltinKind::Contains => Ok(Value::Bool(str_v(&args[0])?.contains(&*str_v(&args[1])?))),
             BuiltinKind::Split => {
-                let parts: Vec<Value> = str_v(&args[0])?
-                    .split(str_v(&args[1])?.as_ref())
-                    .map(|p| Value::Str(Rc::from(p)))
-                    .collect();
+                let s = str_v(&args[0])?;
+                let t = str_v(&args[1])?;
+                // §11.6: 区切りが空文字列のときは各 Unicode スカラ値文字を1要素とし、
+                // 空文字列要素を生じない（Rust の str::split("") とは異なるので使わない）。
+                let parts: Vec<Value> = if t.is_empty() {
+                    s.chars().map(|c| Value::Str(Rc::from(c.to_string()))).collect()
+                } else {
+                    s.split(t.as_ref()).map(|p| Value::Str(Rc::from(p))).collect()
+                };
                 Ok(Value::Array(parts))
             }
             BuiltinKind::Array => Ok(Value::Array(args)),
             BuiltinKind::Nth => {
                 let arr = arr_v(&args[0])?;
                 let i = num(&args[1])?;
+                // §11.6: (union T nil) は実行時に生値。成功は arr[trunc(i)]、失敗は nil。
                 if i >= 0.0 && (i as usize) < arr.len() {
-                    Ok(ok_v(arr[i as usize].clone()))
+                    Ok(arr[i as usize].clone())
                 } else {
                     Ok(Value::Nil)
                 }
@@ -188,7 +271,8 @@ impl Interp {
                 let f = args[1].clone();
                 for x in arr {
                     if bool_v(&self.apply(f.clone(), vec![x.clone()])?)? {
-                        return Ok(ok_v(x));
+                        // §11.6: 成功は生値 x、失敗は nil（Ok で包まない）。
+                        return Ok(x);
                     }
                 }
                 Ok(Value::Nil)
@@ -248,6 +332,17 @@ impl Interp {
                     }
                 }
                 Ok(ok_v(Value::Array(out)))
+            }
+            BuiltinKind::HostMock {
+                effect,
+                default,
+                log,
+            } => {
+                log.borrow_mut().push(crate::host::HostCall {
+                    effect: effect.clone(),
+                    args: args.clone(),
+                });
+                Ok(default.clone())
             }
         }
     }
@@ -421,10 +516,36 @@ fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, Eval
                 env = Env::child_of(&env, vars);
                 *body
             }
-            Core::EffectCall { effect, .. } => {
-                return Err(EvalError::Runtime(format!(
-                    "エフェクト '{effect}!' は P0 >インタープリタでは実行できません（P1）"
-                )))
+            Core::EffectCall {
+                host,
+                effect,
+                args,
+                ..
+            } => {
+                // P1 (§12.4/§12.6): EffectCall は host オブジェクトのハンドラを呼ぶ。
+                // host は囲んでいる defn! の第1引数として束縛されている。
+                let hv = env.lookup(host.as_ref()).ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "host '{host}' が束縛されていません（defn! の第1引数として host を渡してください §12.6）"
+                    ))
+                })?;
+                let handler = match &hv {
+                    Value::Obj(fields) => fields.get(effect.as_ref()).cloned().ok_or_else(|| {
+                        EvalError::Runtime(format!(
+                            "host にエフェクト '{effect}' のハンドラがありません"
+                        ))
+                    })?,
+                    _ => {
+                        return Err(EvalError::Runtime(format!(
+                            "host は obj である必要があります: '{host}'"
+                        )))
+                    }
+                };
+                let mut argv = Vec::with_capacity(args.len());
+                for a in &args {
+                    argv.push(eval_core(interp, a, &env)?);
+                }
+                return interp.apply(handler, argv);
             }
             Core::Error { message, .. } => return Err(EvalError::Runtime(message)),
         };
@@ -527,6 +648,8 @@ pub fn stdlib_env() -> Rc<Env> {
     def("bind", BuiltinKind::Bind);
     def("map-result", BuiltinKind::MapResult);
     def("traverse", BuiltinKind::Traverse);
+    def("to-dec", BuiltinKind::ToDec);
+    def("to-num", BuiltinKind::ToNum);
     env
 }
 
@@ -859,5 +982,77 @@ mod tests {
         assert_eq!(r, Value::Bool(true));
         let r = call_src(src, "od", vec![Value::Num(1_000_001.0)]).expect("ok");
         assert_eq!(r, Value::Bool(true));
+    }
+
+    fn builtin_call(name: &str, args: Vec<Value>) -> Result<Value, EvalError> {
+        let env = global_env();
+        let f = env.lookup(name).expect("builtin");
+        let mut interp = Interp::new();
+        interp.apply(f, args)
+    }
+
+    #[test]
+    fn nth_returns_raw_value_not_ok_wrapped() {
+        let arr = Value::Array(vec![Value::Num(10.0), Value::Num(20.0), Value::Num(30.0)]);
+        let hit = builtin_call("nth", vec![arr.clone(), Value::Num(1.0)]).expect("ok");
+        assert_eq!(hit, Value::Num(20.0), "生値であること（§11.6: Ok で包まない）");
+        let miss = builtin_call("nth", vec![arr, Value::Num(9.0)]).expect("ok");
+        assert_eq!(miss, Value::Nil);
+    }
+
+    #[test]
+    fn find_returns_raw_value_or_nil() {
+        let src = "(defn f (arr : (Array number)) : (Option number) (find arr (fn (x : number) : bool (> x 1))))";
+        let hit = call_src(src, "f", vec![Value::Array(vec![Value::Num(1.0), Value::Num(2.0), Value::Num(3.0)])]).expect("ok");
+        assert_eq!(hit, Value::Num(2.0), "生値であること（§11.6）");
+        let miss = call_src(src, "f", vec![Value::Array(vec![Value::Num(1.0)])]).expect("ok");
+        assert_eq!(miss, Value::Nil);
+    }
+
+    #[test]
+    fn split_empty_separator_splits_into_scalar_values_without_empty_parts() {
+        let r = builtin_call("split", vec![Value::Str(Rc::from("a\u{1f600}b")), Value::Str(Rc::from(""))]).expect("ok");
+        assert_eq!(
+            r,
+            Value::Array(vec![
+                Value::Str(Rc::from("a")),
+                Value::Str(Rc::from("\u{1f600}")),
+                Value::Str(Rc::from("b"))
+            ]),
+            "絵文字は1要素・空要素なし（§11.6）"
+        );
+        let r = builtin_call("split", vec![Value::Str(Rc::from("abc")), Value::Str(Rc::from(""))]).expect("ok");
+        assert_eq!(r, Value::Array(vec![Value::Str(Rc::from("a")), Value::Str(Rc::from("b")), Value::Str(Rc::from("c"))]));
+        let r = builtin_call("split", vec![Value::Str(Rc::from("")), Value::Str(Rc::from(""))]).expect("ok");
+        assert_eq!(r, Value::Array(vec![]));
+        let r = builtin_call("split", vec![Value::Str(Rc::from("a,b,c")), Value::Str(Rc::from(","))]).expect("ok");
+        assert_eq!(r, Value::Array(vec![Value::Str(Rc::from("a")), Value::Str(Rc::from("b")), Value::Str(Rc::from("c"))]));
+    }
+
+    #[test]
+    fn decimal_arithmetic_rounding_and_errors() {
+        let r = call_src("(defn f () : decimal (+ 1.50d 2.25d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Dec(3_750_000_000_000_000_000));
+        let r = call_src("(defn f () : decimal (/ 2.00d 3.00d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Dec(666_666_666_666_666_667), "half-away で切り上がる");
+        let r = call_src("(defn f () : bool (= 1.50d 1.50d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Bool(true));
+        let r = call_src("(defn f () : number (to-num 2.50d))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Num(2.5));
+        let r = call_src("(defn f () : decimal (to-dec 0.1))", "f", vec![]).expect("ok");
+        assert_eq!(r, Value::Dec(100_000_000_000_000_000));
+        // 0 除算・オーバーフローはバックエンド中立の実行時エラー
+        let e = call_src("(defn f () : decimal (/ 1.00d 0.00d))", "f", vec![]).expect_err("err");
+        assert!(e.to_string().contains("decimal-division-by-zero"), "{e}");
+        let e = call_src(
+            "(defn f () : decimal (* 100000000000d 100000000000d))",
+            "f",
+            vec![],
+        )
+        .expect_err("err");
+        assert!(e.to_string().contains("decimal-overflow"), "{e}");
+        // 混在は実行時エラー（検査で弾かれるはずだが eval でも事故らない）
+        let e = call_src("(defn f () : number (+ 1 1.5d))", "f", vec![]);
+        assert!(e.is_err());
     }
 }

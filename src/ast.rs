@@ -42,6 +42,7 @@ pub fn print_pattern(p: &CorePat) -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LitValue {
     Num(f64),
+    Dec(Rc<str>),
     Str(Rc<str>),
     Bool(bool),
     Nil,
@@ -50,6 +51,7 @@ pub enum LitValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Prim {
     Number,
+    Dec,
     Str,
     Bool,
     Nil,

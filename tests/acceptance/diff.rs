@@ -41,3 +41,40 @@ fn stdlib_edge_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["stdlib-edge.lts"], "stdlib-edge.lts");
 }
+
+// M19 (P1 defn! 完全実装): エフェクト呼び出しを含む defn! の差分テスト。
+// host は defn! の第1引数として example 内で明示的に渡す（SPEC §12.6）。
+#[test]
+fn effect_run_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["effect-run.lts"], "effect-run.lts");
+}
+
+// M16 採用済み判断: (a) (union T nil) は実行時に生値（find/nth は成功で生値 T、失敗で nil）、
+// (b) split("") は Unicode スカラ値単位で空要素なし。example の `=> <生値>` で観測する。
+// option-find.lts は cart.lts の find 成功アーム（NegativeQty）を実行時に通す。
+#[test]
+fn option_raw_and_split_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["option-raw.lts"], "option-raw.lts");
+    assert_diff(
+        &*backend,
+        &["money.lts", "cart.lts", "option-find.lts"],
+        "option-find.lts",
+    );
+}
+
+// M21 do-io (SPEC §3.5): 名前なし do 束縛 `(do e1 e2 ...)`。エフェクト連続実行と
+// Result を返す impure 呼び出しの早期 return を interp/backend 両方で検証する。
+#[test]
+fn do_io_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["do-io.lts"], "do-io.lts");
+}
+
+// M23 decimal: 固定小数点 SCALE=18。丸め（half-away）を含め interp と JS で同一結果になること。
+#[test]
+fn decimal_edge_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["decimal-edge.lts"], "decimal-edge.lts");
+}

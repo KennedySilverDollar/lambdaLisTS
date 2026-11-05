@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::ast::print_pattern;
 use crate::desugar::{desugar, CoreDef};
 use crate::diagnostic::{ast_path, DiagKind, Diagnostic, Patch, Severity};
-use crate::effects::check_effects;
+use crate::effects::{check_effects, find_effect_calls};
 use crate::exhaustive::check_exhaustive;
 use crate::ir::{Core, Pat, PatKind};
 use crate::lexer::tokenize;
@@ -31,12 +31,17 @@ pub struct ModuleResult {
     pub type_aliases: AliasEnv,
     pub effects: BTreeMap<Rc<str>, Type>,
     pub exports: Vec<Rc<str>>,
+    /// defn 名 -> 純粋かどうか（defn! は false）。import 先モジュールの分も含めて伝播させる（§7.2 eff）。
+    pub defn_purity: BTreeMap<Rc<str>, bool>,
 }
 
 #[derive(Default)]
 pub struct ModuleCache {
     pub modules: BTreeMap<String, ModuleResult>,
     pub graph: ModuleGraph,
+    /// 注入された host の束縛（名前 → host の obj 型）。REPL の `--host` が設定する。
+    /// ここにある名前は値名前空間の既知の全局として検査に通る（host DI）。
+    pub host_bindings: BTreeMap<Rc<str>, Type>,
 }
 
 pub fn new_module_cache() -> ModuleCache {
@@ -120,11 +125,14 @@ pub struct Checker<'a> {
     next_var_id: usize,
     stdlib: BTreeMap<Rc<str>, Scheme>,
     predef: BTreeSet<Rc<str>>,
+    defn_purity: BTreeMap<Rc<str>, bool>,
+    in_impure_defn: bool,
 }
 
 impl<'a> Checker<'a> {
     pub fn new(file: &'a str, cache: &'a mut ModuleCache) -> Self {
-        Checker {
+        let host_bindings = cache.host_bindings.clone();
+        let mut checker = Checker {
             file,
             cache,
             diagnostics: Vec::new(),
@@ -136,7 +144,15 @@ impl<'a> Checker<'a> {
             next_var_id: 1,
             stdlib: stdlib(),
             predef: BTreeSet::new(),
+            defn_purity: BTreeMap::new(),
+            in_impure_defn: false,
+        };
+        // 注入された host は既知の全局として扱う（host DI）
+        for (n, t) in host_bindings {
+            checker.values.insert(n.clone(), t.clone());
+            checker.predef.insert(n);
         }
+        checker
     }
 
     pub fn run(&mut self, defs: &[CoreDef]) -> ModuleResult {
@@ -179,9 +195,11 @@ impl<'a> Checker<'a> {
                 ret,
                 span,
                 path,
+                pure,
                 ..
             } = d
             {
+                self.defn_purity.insert(name.clone(), *pure);
                 if self.values.contains_key(name)
                     || self.effects.contains_key(name)
                     || !self.predef.insert(name.clone())
@@ -260,6 +278,22 @@ impl<'a> Checker<'a> {
                             self.resolve(&p.ty, span, &ast_path(path, &["params", &i.to_string()]))
                         })
                         .collect();
+                    // P1 (M22): prop は実評価されるので forall パラメータは生成可能な型のみ
+                    for (p, t) in params.iter().zip(ptypes.iter()) {
+                        if !crate::prop::is_generatable(t, &self.aliases) {
+                            self.diag(
+                                DiagKind::TypeMismatch,
+                                span.clone(),
+                                format!(
+                                    "prop の forall パラメータ '{n}' の型 {t:?} は生成できない型です（関数型・型変数は不可）",
+                                    n = p.name
+                                ),
+                                Some(json!({ "path": path })),
+                                None,
+                                Severity::Error,
+                            );
+                        }
+                    }
                     let frame: BTreeMap<Rc<str>, Type> = params
                         .iter()
                         .zip(ptypes.iter())
@@ -285,13 +319,14 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        self.diagnostics.extend(check_effects(defs));
+        self.diagnostics.extend(check_effects(defs, &self.defn_purity));
         ModuleResult {
             diagnostics: self.diagnostics.clone(),
             value_types: self.values.clone(),
             type_aliases: self.aliases.clone(),
             effects: self.effects.clone(),
             exports,
+            defn_purity: self.defn_purity.clone(),
         }
     }
 
@@ -348,6 +383,9 @@ impl<'a> Checker<'a> {
                 self.effects.insert(name.clone(), t.clone());
             }
         }
+        for (n, p) in &mod_result.defn_purity {
+            self.defn_purity.insert(n.clone(), *p);
+        }
     }
 
     fn check_defn(&mut self, d: &CoreDef) {
@@ -358,6 +396,7 @@ impl<'a> Checker<'a> {
             body,
             span,
             path,
+            pure,
             ..
         } = d
         else {
@@ -398,8 +437,54 @@ impl<'a> Checker<'a> {
             .map(|(p, t)| (p.name.clone(), t.clone()))
             .collect();
         self.scope.push(frame);
+        let saved_impure = self.in_impure_defn;
+        self.in_impure_defn = !pure;
         self.check(body, &ret_t, &ast_path(path, &["body"]));
         self.scope.pop();
+        self.in_impure_defn = saved_impure;
+        if !pure {
+            self.check_host_handlers(&param_types, body, path);
+        }
+    }
+
+    /// P1 (§12.6): defn! の第1引数が host。その型が obj なら、本体の各エフェクト呼び出しに
+    /// 対応するハンドラフィールドが宣言シグネチャと一致するか検査する。
+    fn check_host_handlers(&mut self, param_types: &[Type], body: &Core, path: &str) {
+        let Some(host_t) = param_types.first() else {
+            return;
+        };
+        let host_t = prune(host_t, &self.subst);
+        let Type::Obj(fields) = &host_t else {
+            return;
+        };
+        let mut sites = Vec::new();
+        find_effect_calls(body, &mut sites);
+        for site in &sites {
+            let Some(sig) = self.effects.get(&site.effect).cloned() else {
+                continue;
+            };
+            match fields.get(&site.effect) {
+                Some(ft) => {
+                    let ft = prune(ft, &self.subst);
+                    if unify(&ft, &sig, &mut self.subst, &self.aliases).is_none() {
+                        self.type_mismatch(&site.span, &ast_path(path, &["body"]), &sig, &ft);
+                    }
+                }
+                None => {
+                    self.diag(
+                        DiagKind::TypeMismatch,
+                        site.span.clone(),
+                        format!(
+                            "host の型にエフェクト '{e}!' のハンドラがありません",
+                            e = site.effect
+                        ),
+                        Some(json!({ "path": path, "effect": site.effect })),
+                        None,
+                        Severity::Error,
+                    );
+                }
+            }
+        }
     }
 
     fn fresh(&mut self) -> Type {
@@ -509,6 +594,7 @@ impl<'a> Checker<'a> {
         match value {
             Value::Nil => Type::Nil,
             Value::Num(_) => Type::Number,
+            Value::Dec(_) => Type::Dec,
             Value::Str(_) => Type::Str,
             Value::Bool(_) => Type::Bool,
             _ => Type::Nil,
@@ -572,6 +658,30 @@ impl<'a> Checker<'a> {
             }
             Core::App { f, args, span, .. } => {
                 if let Core::Var { name, .. } = f.as_ref() {
+                    // decimal（M23）: + - * / < <= > >= は「両引数が decimal」のとき decimal/bool を返す。
+                    // 両 number なら従来どおり。混在は type-mismatch（暗黙変換なし）。
+                    if matches!(
+                        name.as_ref(),
+                        "+" | "-" | "*" | "/" | "<" | "<=" | ">" | ">="
+                    ) && args.len() == 2
+                    {
+                        let t1 = prune(&self.infer(&args[0], &ast_path(path, &["args", "0"])), &self.subst);
+                        let t2 = prune(&self.infer(&args[1], &ast_path(path, &["args", "1"])), &self.subst);
+                        match (&t1, &t2) {
+                            (Type::Dec, Type::Dec) => {
+                                return if matches!(name.as_ref(), "<" | "<=" | ">" | ">=") {
+                                    Type::Bool
+                                } else {
+                                    Type::Dec
+                                };
+                            }
+                            (Type::Number, Type::Number) => {}
+                            _ => {
+                                self.type_mismatch(span, path, &t1, &t2);
+                                return Type::Nil;
+                            }
+                        }
+                    }
                     if let Some((_, kind)) = VARIADIC.iter().find(|(n, _)| *n == name.as_ref()) {
                         let param = if *kind == "string" {
                             Type::Str
@@ -698,6 +808,7 @@ impl<'a> Checker<'a> {
                 effect,
                 args,
                 span,
+                ..
             } => {
                 let Some(sig) = self.effects.get(effect).cloned() else {
                     self.diag(
@@ -866,6 +977,19 @@ impl<'a> Checker<'a> {
         for (i, b) in binds.iter().enumerate() {
             let bind_path = ast_path(path, &["binds", &i.to_string()]);
             let ti = prune(&self.infer(&b.expr, &bind_path), &self.subst);
+            if matches!(b.expr, Core::EffectCall { .. }) && self.in_impure_defn {
+                // §7.4 rule 5: defn! 内ではエフェクト呼び出しの do>bind は Result でなくてもよい
+                if b.name.as_ref() != "_" {
+                    let bound = match &ti {
+                        Type::ResultT(ok, _) => apply_subst(ok, &self.subst),
+                        _ => apply_subst(&ti, &self.subst),
+                    };
+                    if let Some(frame) = self.scope.last_mut() {
+                        frame.insert(b.name.clone(), bound);
+                    }
+                }
+                continue;
+            }
             if !matches!(ti, Type::ResultT(_, _)) {
                 let want = Type::ResultT(Box::new(self.fresh()), Box::new(err_t.clone()));
                 self.type_mismatch(span, &bind_path, &want, &ti);
@@ -991,6 +1115,7 @@ impl<'a> Checker<'a> {
                     Value::Nil => Type::Nil,
                     Value::Str(sv) => Type::Literal(sv.clone()),
                     Value::Num(_) => Type::Number,
+                    Value::Dec(_) => Type::Dec,
                     Value::Bool(_) => Type::Bool,
                     _ => Type::Nil,
                 };

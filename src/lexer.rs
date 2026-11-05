@@ -229,6 +229,18 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
+        // decimal 接尾辞: 1.50d（直後がシンボル文字・'!' でなければ d を消費）
+        if self.peek() == Some('d')
+            && !self
+                .peek_second()
+                .is_some_and(|c| is_symbol_char(c) || c == '!')
+        {
+            self.bump();
+            let end = self.pos;
+            let text = &self.src[start..end - 1];
+            self.emit(TokenKind::Dec, start, line, col, end, Some(TokenValue::Dec(Rc::from(text))));
+            return;
+        }
         let end = self.pos;
         let text = &self.src[start..end];
         match text.parse::<f64>() {
@@ -618,6 +630,19 @@ mod tests {
                 effect: true
             })
         );
+    }
+
+    #[test]
+    fn decimal_suffix_d_makes_dec_token() {
+        let r = lex("1.50d 2 1d xd 1.5");
+        let kinds: Vec<TokenKind> = r.tokens.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds[0], TokenKind::Dec);
+        assert_eq!(r.tokens[0].value, Some(TokenValue::Dec(Rc::from("1.50"))));
+        assert_eq!(kinds[2], TokenKind::Dec, "1d も decimal");
+        assert_eq!(r.tokens[4].value, Some(TokenValue::Num(1.5)), "1.5 は number のまま");
+        // xd はシンボルのまま
+        let r2 = lex("xd");
+        assert_eq!(r2.tokens[0].kind, TokenKind::Symbol);
     }
 
     #[test]
