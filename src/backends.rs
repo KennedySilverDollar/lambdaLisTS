@@ -200,6 +200,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::Dec(s) => json!({ "tag": "Dec", "value": crate::decimal::fmt_dec(*s) }),
         Value::Str(s) => serde_json::Value::String(s.to_string()),
         Value::Bool(b) => serde_json::Value::Bool(*b),
+        // char は JS 側で1要素文字列なので JSON でも素の文字列として扱う
+        Value::Char(c) => serde_json::Value::String(c.to_string()),
         Value::Nil => serde_json::Value::Null,
         Value::Array(xs) => serde_json::Value::Array(xs.iter().map(value_to_json).collect()),
         Value::Obj(m) => serde_json::Value::Object(

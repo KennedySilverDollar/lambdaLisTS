@@ -22,7 +22,7 @@ const RESERVED: &[&str] = &[
     "type", "effect", "prop", "forall", "example", "import", "export", "Array", "union",
     "Result", "Option",
 ];
-const PRIMS: &[&str] = &["number", "string", "bool", "decimal"];
+const PRIMS: &[&str] = &["number", "string", "bool", "decimal", "char"];
 const OPERATORS: &[&str] = &["+", "-", "*", "/", "<", ">", "<=", ">=", "="];
 
 fn is_reserved(text: &str) -> bool {
@@ -824,6 +824,7 @@ impl<'a> Parser<'a> {
                             "decimal" => Prim::Dec,
                             "string" => Prim::Str,
                             "bool" => Prim::Bool,
+                            "char" => Prim::Char,
                             _ => Prim::Nil,
                         };
                         TypeExpr::Prim {
@@ -1305,6 +1306,17 @@ impl<'a> Parser<'a> {
                 };
                 Expr::Lit {
                     value: LitValue::Bool(b),
+                    trivia: t.trivia.clone(),
+                    span: t.span.clone(),
+                }
+            }
+            TokenKind::Char => {
+                let c = match &t.value {
+                    Some(TokenValue::Char(c)) => *c,
+                    _ => 'a',
+                };
+                Expr::Lit {
+                    value: LitValue::Char(c),
                     trivia: t.trivia.clone(),
                     span: t.span.clone(),
                 }
@@ -1794,6 +1806,17 @@ impl<'a> Parser<'a> {
                     };
                     Pat::Lit {
                         value: LitValue::Str(s),
+                        trivia: t.trivia.clone(),
+                        span: t.span.clone(),
+                    }
+                }
+                TokenKind::Char => {
+                    let c = match &t.value {
+                        Some(TokenValue::Char(c)) => *c,
+                        _ => 'a',
+                    };
+                    Pat::Lit {
+                        value: LitValue::Char(c),
                         trivia: t.trivia.clone(),
                         span: t.span.clone(),
                     }

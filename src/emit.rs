@@ -38,8 +38,16 @@ const MAP_JS: &str = "function $mjson(v) {\n  if (typeof v === \"bigint\") { con
 const DEC_JS: &str = "const $DEC_S = 10n ** 18n;\nconst $DEC_MAX = 170141183460469231731687303715884105727n;\nfunction $dec_check(r) { if (r > $DEC_MAX || r < -$DEC_MAX) throw new Error(\"decimal-overflow\"); return r; }\nconst $dec_add = (a, b) => $dec_check(a + b);\nconst $dec_sub = (a, b) => $dec_check(a - b);\nconst $dec_mul = (a, b) => { const p = a * b; const neg = p < 0n; const ap = neg ? -p : p; let q = ap / $DEC_S; const r = ap % $DEC_S; if (2n * r >= $DEC_S) q += 1n; return $dec_check(neg ? -q : q); };\nconst $dec_div = (a, b) => { if (b === 0n) throw new Error(\"decimal-division-by-zero\"); const neg = (a < 0n) !== (b < 0n); const num = (a < 0n ? -a : a) * $DEC_S; const den = b < 0n ? -b : b; let q = num / den; const r = num % den; if (2n * r >= den) q += 1n; return $dec_check(neg ? -q : q); };\nfunction $print_dec(v) { const neg = v < 0n; const a = neg ? -v : v; const i = a / $DEC_S; const f = a % $DEC_S; return (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\"); }\nconst $to_dec = (a) => { if (typeof a !== \"number\" || Number.isNaN(a) || !Number.isFinite(a)) throw new Error(\"decimal-overflow\"); const m = /^([+-]?)(\\d+)(?:\\.(\\d+))?e([+-]?\\d+)$/.exec(a.toExponential()); if (!m) throw new Error(\"decimal-overflow\"); const sign = m[1] === \"-\" ? -1n : 1n; const digits = m[2] + (m[3] || \"\"); const exp = parseInt(m[4], 10) - (m[3] || \"\").length + 18; const mant = BigInt(digits); let r; if (exp >= 0) { r = mant * 10n ** BigInt(exp); } else { const den = 10n ** BigInt(-exp); let q = mant / den; const rem = mant % den; if (2n * rem >= den) q += 1n; r = q; } return $dec_check(sign * r); };\nfunction $json(v) { if (typeof v === \"bigint\") return JSON.stringify({ tag: \"Dec\", value: $print_dec(v) }); if (Array.isArray(v)) return \"[\" + v.map($json).join(\",\") + \"]\"; if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $json(v[k])).join(\",\") + \"}\"; } return JSON.stringify(v); }\n";
 
 pub fn js_name(name: &str) -> String {
-    // 名前中の "->"（obj->map 等）は _to_ へ（§12.3 の kebab-case 変換の拡張）
-    let mut n = name.replace("->", "_to_").replace('-', "_");
+    // 名前中の演算子由来の文字を無害化（§12.3 の kebab-case 変換の拡張。
+    // design §3.1 の char<=? / char=?、§1.1 の obj->map 等）
+    let mut n = name
+        .replace("->", "_to_")
+        .replace("<=", "_le_")
+        .replace(">=", "_ge_")
+        .replace('<', "_lt_")
+        .replace('>', "_gt_")
+        .replace('=', "_eq_")
+        .replace('-', "_");
     if n.ends_with('?') {
         n = format!("{}_q", &n[..n.len() - 1]);
     }
@@ -107,6 +115,8 @@ pub fn lit_js(value: &Value) -> String {
             }
         }
         Value::Bool(b) => format!("{b}"),
+        // char は1要素文字列（コードポイント単位。design §7）。JSON 文字列リテラル=有効な JS 文字列。
+        Value::Char(c) => serde_json::to_string(&c.to_string()).unwrap_or_else(|_| "\"?\"".to_string()),
         Value::Dec(s) => format!("{s}n"),
         _ => "null".to_string(),
     }
@@ -782,6 +792,33 @@ impl<'a> Gen<'a> {
             "set-has?" => "(s, k) => s.has(k)".to_string(),
             "set->array" => "(s) => [...s]".to_string(),
             "obj->map" => "(o) => $obj_to_map(o)".to_string(),
+            // design/interp-capability.md §1.2/§3.1: char は1要素文字列。位置はコードポイント（スカラー値）単位。
+            // 添字の切り捨て・NaN は nth と同じ規則（§11.6）。
+            "char-at" => {
+                let ok = self.runtime_ref("ok");
+                let err = self.runtime_ref("err");
+                format!("(s, i) => {{ const c = [...s]; const k = Math.trunc(i); return (Number.isNaN(i) || i < 0 || k >= c.length) ? {err}({{ tag: \"out-of-range\" }}) : {ok}(c[k]); }}")
+            }
+            "char-code" => "(c) => c.codePointAt(0)".to_string(),
+            "code->char" => {
+                let ok = self.runtime_ref("ok");
+                let err = self.runtime_ref("err");
+                format!("(n) => {{ if (!Number.isInteger(n) || n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF)) return {err}({{ tag: \"invalid-code\" }}); return {ok}(String.fromCodePoint(n)); }}")
+            }
+            "str-take-while" => "(s, i, f) => { const c = [...s]; const len = c.length; const st = Number.isNaN(i) ? 0 : i < 0 ? Math.max(len + i, 0) : Math.min(i, len); let p = Math.trunc(st); let acc = \"\"; while (p < len && f(c[p])) { acc += c[p]; p++; } return { acc, pos: p }; }".to_string(),
+            "str-skip-while" => "(s, i, f) => { const c = [...s]; const len = c.length; const st = Number.isNaN(i) ? 0 : i < 0 ? Math.max(len + i, 0) : Math.min(i, len); let p = Math.trunc(st); while (p < len && f(c[p])) p++; return p; }".to_string(),
+            "str-split-at" => {
+                let ok = self.runtime_ref("ok");
+                let err = self.runtime_ref("err");
+                format!("(s, i) => {{ const c = [...s]; if (Number.isNaN(i)) return {err}({{ tag: \"out-of-range\" }}); const k = Math.trunc(i); if (i < 0 || k > c.length) return {err}({{ tag: \"out-of-range\" }}); return {ok}({{ left: c.slice(0, k).join(\"\"), right: c.slice(k).join(\"\") }}); }}")
+            }
+            "str-contains?" => "(s, t) => s.includes(t)".to_string(),
+            // 文字列の <= は UTF-16 コード単位順なので、スカラー値（コードポイント）比較にする
+            "char<=?" => "(a, b) => a.codePointAt(0) <= b.codePointAt(0)".to_string(),
+            "char=?" => "(a, b) => a === b".to_string(),
+            "char-alphabetic?" => "(c) => /\\p{Alphabetic}/u.test(c)".to_string(),
+            "char-numeric?" => "(c) => /\\p{N}/u.test(c)".to_string(),
+            "char-whitespace?" => "(c) => /\\p{White_Space}/u.test(c)".to_string(),
             other => format!(
                 "(() => {{ throw new Error('unsupported stdlib: ' + {other:?}); }})"
             ),
@@ -1360,6 +1397,8 @@ mod tests {
         assert_eq!(js_name("fold-left"), "fold_left");
         assert_eq!(js_name("obj->map"), "obj_to_map");
         assert_eq!(js_name("set->array"), "set_to_array");
+        assert_eq!(js_name("char<=?"), "char_le__q");
+        assert_eq!(js_name("char=?"), "char_eq__q");
     }
 
     #[test]

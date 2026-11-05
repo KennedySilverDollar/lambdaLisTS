@@ -45,6 +45,7 @@ pub enum LitValue {
     Dec(Rc<str>),
     Str(Rc<str>),
     Bool(bool),
+    Char(char),
     Nil,
 }
 
@@ -54,6 +55,7 @@ pub enum Prim {
     Dec,
     Str,
     Bool,
+    Char,
     Nil,
 }
 

@@ -12,6 +12,7 @@ pub enum Value {
     Dec(i128),
     Str(Rc<str>),
     Bool(bool),
+    Char(char),                     // Unicode スカラー値1つ。JS 側は1要素文字列（§1.2/§7）
     Nil,
     Array(Vec<Value>),
     Obj(BTreeMap<Rc<str>, Value>),
@@ -84,6 +85,18 @@ pub enum BuiltinKind {
     SetHas,
     SetToArray,
     ObjToMap,
+    CharAt,
+    CharCode,
+    CodeToChar,
+    StrTakeWhile,
+    StrSkipWhile,
+    StrSplitAt,
+    StrContains,
+    CharLe,
+    CharEq,
+    CharAlphabetic,
+    CharNumeric,
+    CharWhitespace,
     /// モック host のハンドラ（host.rs）。呼び出しを log に記録し、default を返す。
     /// log は実行時の記録なのでシリアライズしない。
     HostMock {
@@ -159,6 +172,7 @@ fn eq_visit(a: &Value, b: &Value, path: &mut Vec<(usize, usize)>) -> Result<bool
         (Value::Num(x), Value::Num(y)) => Ok(x == y),
         (Value::Str(x), Value::Str(y)) => Ok(x == y),
         (Value::Bool(x), Value::Bool(y)) => Ok(x == y),
+        (Value::Char(x), Value::Char(y)) => Ok(x == y),
         (Value::Nil, Value::Nil) => Ok(true),
         (Value::Array(xs), Value::Array(ys)) => {
             if xs.len() != ys.len() {
@@ -291,6 +305,9 @@ pub fn print_value(v: &Value) -> String {
             }
         }
         Value::Bool(b) => format!("{b}"),
+        // char の印字は §11.6 の string と同じく生文字（引用符・エスケープなし）。
+        // リテラル構文のみ `\<文字>`。JS 側（1要素文字列）と同一バイト列になる。
+        Value::Char(c) => c.to_string(),
         Value::Dec(s) => crate::decimal::fmt_dec(*s),
         Value::Array(xs) => format!(
             "[{}]",

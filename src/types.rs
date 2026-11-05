@@ -9,6 +9,7 @@ pub enum Type {
     Dec,
     Str,
     Bool,
+    Char,                           // Unicode スカラー値1つ（design/interp-capability.md §1.2）
     Nil,
     Literal(Rc<str>),
     Array(Box<Type>),
@@ -39,6 +40,7 @@ pub fn structural_equal(a: &Type, b: &Type) -> bool {
         | (Type::Dec, Type::Dec)
         | (Type::Str, Type::Str)
         | (Type::Bool, Type::Bool)
+        | (Type::Char, Type::Char)
         | (Type::Nil, Type::Nil) => true,
         (Type::Literal(x), Type::Literal(y)) => x == y,
         (Type::Var(x), Type::Var(y)) => x == y,
@@ -189,6 +191,7 @@ fn print_type_seen(t: &Type, aliases: &AliasEnv, seen: &mut BTreeSet<Rc<str>>) -
         Type::Dec => "decimal".to_string(),
         Type::Str => "string".to_string(),
         Type::Bool => "bool".to_string(),
+        Type::Char => "char".to_string(),
         Type::Nil => "nil".to_string(),
         Type::Literal(v) => serde_json::to_string(v.as_ref()).unwrap_or_else(|_| format!("\"{v}\"")),
         Type::Var(id) => format!("?{id}"),
@@ -295,6 +298,9 @@ mod tests {
     #[test]
     fn print_type_canonical_forms() {
         assert_eq!(print_type_plain(&Type::Number), "number");
+        assert_eq!(print_type_plain(&Type::Char), "char");
+        assert!(structural_equal(&Type::Char, &Type::Char));
+        assert!(!structural_equal(&Type::Char, &Type::Str));
         assert_eq!(print_type_plain(&lit("EmptyCart")), "\"EmptyCart\"");
         assert_eq!(print_type_plain(&arr(Type::Number)), "(Array number)");
         assert_eq!(

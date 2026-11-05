@@ -696,6 +696,7 @@ impl<'a> Checker<'a> {
             Value::Dec(_) => Type::Dec,
             Value::Str(_) => Type::Str,
             Value::Bool(_) => Type::Bool,
+            Value::Char(_) => Type::Char,
             _ => Type::Nil,
         }
     }
@@ -1238,6 +1239,7 @@ impl<'a> Checker<'a> {
                     Value::Num(_) => Type::Number,
                     Value::Dec(_) => Type::Dec,
                     Value::Bool(_) => Type::Bool,
+                    Value::Char(_) => Type::Char,
                     _ => Type::Nil,
                 };
                 if unify(&pt, &s, &mut self.subst, &self.aliases).is_none() {

@@ -363,3 +363,44 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 5. SPEC §3.3 の型コンストラクタ命名規則（Array/Result/Option は大文字、union/obj/fn は小文字）と design §1.1 の小文字 `map`/`set` の混在は、SPEC 側の統一が未決定のため design に従った。SPEC 改訂時に統一を検討。
 6. SPEC §11.6 の印字規約は map/set を未定義のため、挿入順 s 式で新規決定（上記）。SPEC 改訂時に追記候補。
 7. unify 後（型変数が具体化された後）の map/set キー制約の再検証は未実施。現状は注釈時の検証＋実行時エラーで担保。
+
+---
+
+## 19. interp-capability §1.2/§3.1（C2 char + 文字列プリミティブ）の実装判断（SPEC.md は未変更）
+
+対象: design/interp-capability.md §1.2（char 型・`\<文字>` リテラル・char-code）と §3.1（位置ベース文字列 API）。条文は SPEC §2（字句）§3.3（型構文）§3.6（パターン）§6（型）§8.3（等価）§11.6（印字）§12.4/§12.5（JS）に写像。
+
+### 実装
+- **型/値**: `Type::Char` / `Value::Char(char)`。surface 型は `char` プリム。サロゲートは存在しない（`char::from_u32` が拒否。lexer の `\uD800` 等もエラー）。
+- **リテラル**: `\<文字>` を lexer に追加。エスケープ規則は str リテラルと共通（`\" \\ \n \t \r \uXXXX`、いずれも単一スカラー値へ）。fmt は `print_char_lit` で逆写像（制御文字は `\uXXXX`）し冪等・AST 保存を確認。
+- **lexer の名前規則拡張**: 名前中の `->`（既存）に加え、演算子接尾辞 `<=? >=? =? <? >?` をシンボルの一部として許可（§3.1 の `char<=?` / `char=?` のため）。単独の `<` `>` `=` `->` は従来通り Punct（演算子・パイプ）のまま。`js_name` はこれらを `_le_`/`_ge_`/`_lt_`/`_gt_`/`_eq_`/`_to_` へ無害化（既存名には影響なし）。
+- **stdlib**（§3.1 を現 SPEC 型へ写像。`str`→string、`int`→number（i64 は P5）、`result`→`(Result T (obj (tag ...)))`）:
+  - `char-at : (fn (string number) : (Result char (obj (tag "out-of-range"))))` — 添字はスカラー値単位・小数は切り捨て（nth と同じ §11.6）、NaN/負/範囲外は err out-of-range
+  - `char-code : (fn (char) : number)`（スカラー値）、`code->char : (fn (number) : (Result char (obj (tag "invalid-code"))))` — 非整数・範囲外・サロゲートは err invalid-code
+  - `str-take-while : (fn (string number (fn (char) : bool)) : (obj (acc : string) (pos : number)))` — 開始位置は slice_bounds と同じクランプ（NaN→0・負は len+x・超過は len）
+  - `str-skip-while : (fn (string number (fn (char) : bool)) : number)` — 位置のみ返す（部分文字列を作らない設計）
+  - `str-split-at : (fn (string number) : (Result (obj (left : string) (right : string)) (obj (tag "out-of-range"))))` — 0..len の範囲のみ ok、NaN/負/超過は err
+  - `str-contains? : (fn (string string) : bool)`（contains? と同じ）
+  - `char<=? char=? : (fn (char char) : bool)`、`char-alphabetic? char-numeric? char-whitespace? : (fn (char) : bool)`
+- **述語の意味論（interp/JS 一致）**: alphabetic = Unicode `Alphabetic`（Rust `char::is_alphabetic` = JS `/\p{Alphabetic}/u`）、numeric = カテゴリ N（`is_numeric` = `/\p{N}/u`）、whitespace = `White_Space`（`is_whitespace` = `/\p{White_Space}/u`）。`char<=?` はコードポイント（スカラー値）比較（JS の文字列 `<=` は UTF-16 コード単位順なので `codePointAt` で比較。U+1F600 vs U+FFFF で差が出ることをテストで確認）。
+- **等価・パターン**: `(= \a \a)` は構造的等価（Char 同士のみ。char と string は unify されない）。match の char リテラルパターンを追加（網羅性検査は char 型全体を1ケースとして扱うため `_` が必要。既存の number リテラルと同じくリテラル1つでは型全体をカバーしない）
+- **印字（§11.6）**: char は string と同じく**生文字**（引用符・エスケープなし）で印字。リテラル構文のみ `\<文字>`。JS 側で char = 1要素文字列なので `$print` でも同一バイト列になる（`str \a` → `"a"`）。
+- **JS バックエンド（§7）**: char は1要素文字列（コードポイント単位）。`char-at` は `[...s][k]`、`char-code` は `codePointAt(0)`、`code->char` は `String.fromCodePoint`＋範囲検査。リテラルは通常の JS 文字列リテラルへ lowering。
+- **JSON**: char は素の JSON 文字列として直列化（JS 側と同一。char と string は JSON 上区別されないため、example の actual に生の char を出さない方針で fixture を設計）。
+
+### テスト追加
+- `tests/fixtures/char-edge.lts`（63 example: リテラル/述語/スカラー値境界（U+1F600・U+FFFF）・code->char の invalid-code 往復（サロゲート 55296/57343・U+110000・負・小数・NaN）・char-at の out-of-range ・位置ベース API の簡単なレキサー（空白スキップ+数字列読み取り。絵文字またぎ）str-split-at・str-contains?・char を含む union と match・印字）→ `diff::char_edge_diff_interp_vs_backend`（interp vs compile+node で全一致）
+- 単体: lexer（char リテラル・サロゲート拒否・演算子接尾辞名）、fmt（char リテラル往復・冪等・AST 保存。char-edge.lts を fixture 一覧へ）、types/unify（char）、js_name
+
+### 検証
+- `cargo test` 257 全パス（254 + 3）、warning 0。`LISTS_BACKEND=mock` でも acceptance 18/18。
+- `lists compile char-edge.lts` を2回実行しバイト一致、node で 63/63 example ok。`lists fmt` in-place 2回で安定。golden 無改変。`git diff -- SPEC.md` 空。
+
+### ギャップ・残課題（SPEC には報告のみ）
+1. design の `int`（char-code の戻り値など）は現 SPEC では `number` のみ（i64 は §14 P5）のため number で実装。char-code の値は 0..0x10FFFF なので f64 で正確に表現できる。
+2. design の `(result char out-of-range)` は `(Result char (obj (tag "out-of-range")))` に写像（map-get の not-found と同じ方式）。
+3. char の印字は §11.6 に未定義のため「string と同じく生文字」と決定（JS の 1要素文字列表現と一致させるため）。`\<文字>` はリテラル構文のみ。SPEC 改訂時に追記候補。
+4. char-at の小数添字は切り捨て（nth と同じ §11.6 规則）。str-split-at は範囲外を err とする（slice_bounds のクランプとは異なる。位置ベース API は「失敗を result で返す」設計のため）。開始位置のクランプのみ slice_bounds と共通。
+5. code->char は非整数を invalid-code とする（往復 code->char(char-code c)=ok c を優先）。trunc 方針もあり得たが記録のみ。
+6. JS で char（1要素文字列）と string は実行時同一なので、`=` は型検査でのみ区別（char vs string は unify 失敗）。JSON 直列化でも区別されない（上記）。
+7. 網羅性検査: char/number のリテラルパターン1つでは型全体をカバーしない（既存の P0 単純アルゴリズム §6.5 のまま）。char リテラルも同様。

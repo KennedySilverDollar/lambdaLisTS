@@ -48,7 +48,15 @@ pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
     let dec = Type::Dec;
     let str_t = Type::Str;
     let bool_t = Type::Bool;
+    let char_t = Type::Char;
     let nil_t = Type::Nil;
+
+    fn tag_obj(tag: &str) -> Type {
+        Type::Obj(BTreeMap::from([(
+            Rc::from("tag"),
+            Type::Literal(Rc::from(tag)),
+        )]))
+    }
     BTreeMap::from([
         entry("+", vec![], fn_t(vec![num.clone(), num.clone()], num.clone())),
         entry("-", vec![], fn_t(vec![num.clone(), num.clone()], num.clone())),
@@ -185,5 +193,49 @@ pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
         ),
         // obj -> map は単方向変換。値型は obj フィールド型の union（check.rs で特殊処理）。
         entry("obj->map", vec![1, 2], fn_t(vec![v(1)], map_t(str_t.clone(), v(2)))),
+        // design/interp-capability.md §1.2/§3.1: char と文字列プリミティブ（C2）。
+        // 位置は Unicode スカラー値（char）単位。int は現 SPEC では number（REPORT.md 記録）。
+        entry("char-at", vec![], fn_t(vec![str_t.clone(), num.clone()], res(char_t.clone(), tag_obj("out-of-range")))),
+        entry("char-code", vec![], fn_t(vec![char_t.clone()], num.clone())),
+        entry("code->char", vec![], fn_t(vec![num.clone()], res(char_t.clone(), tag_obj("invalid-code")))),
+        entry(
+            "str-take-while",
+            vec![],
+            fn_t(
+                vec![str_t.clone(), num.clone(), fn_t(vec![char_t.clone()], bool_t.clone())],
+                Type::Obj(BTreeMap::from([
+                    (Rc::from("acc"), str_t.clone()),
+                    (Rc::from("pos"), num.clone()),
+                ])),
+            ),
+        ),
+        entry(
+            "str-skip-while",
+            vec![],
+            fn_t(
+                vec![str_t.clone(), num.clone(), fn_t(vec![char_t.clone()], bool_t.clone())],
+                num.clone(),
+            ),
+        ),
+        entry(
+            "str-split-at",
+            vec![],
+            fn_t(
+                vec![str_t.clone(), num.clone()],
+                res(
+                    Type::Obj(BTreeMap::from([
+                        (Rc::from("left"), str_t.clone()),
+                        (Rc::from("right"), str_t.clone()),
+                    ])),
+                    tag_obj("out-of-range"),
+                ),
+            ),
+        ),
+        entry("str-contains?", vec![], fn_t(vec![str_t.clone(), str_t.clone()], bool_t.clone())),
+        entry("char<=?", vec![], fn_t(vec![char_t.clone(), char_t.clone()], bool_t.clone())),
+        entry("char=?", vec![], fn_t(vec![char_t.clone(), char_t.clone()], bool_t.clone())),
+        entry("char-alphabetic?", vec![], fn_t(vec![char_t.clone()], bool_t.clone())),
+        entry("char-numeric?", vec![], fn_t(vec![char_t.clone()], bool_t.clone())),
+        entry("char-whitespace?", vec![], fn_t(vec![char_t.clone()], bool_t.clone())),
     ])
 }

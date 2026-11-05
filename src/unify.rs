@@ -136,6 +136,7 @@ pub fn unify(a0: &Type, b0: &Type, subst: &mut Subst, aliases: &AliasEnv) -> Opt
         | (Type::Dec, Type::Dec)
         | (Type::Str, Type::Str)
         | (Type::Bool, Type::Bool)
+        | (Type::Char, Type::Char)
         | (Type::Nil, Type::Nil) => Some(a.clone()),
         (Type::Literal(x), Type::Literal(y)) if x == y => Some(a.clone()),
         (Type::Array(x), Type::Array(y)) => unify(x, y, subst, aliases),

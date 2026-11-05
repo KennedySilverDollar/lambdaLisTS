@@ -30,10 +30,33 @@ fn map_key(v: &Value) -> Result<MapKey, EvalError> {
 }
 
 fn not_found_value() -> Value {
+    err_tag_value("not-found")
+}
+
+fn err_tag_value(tag: &str) -> Value {
     Value::Obj(BTreeMap::from([(
         Rc::from("tag"),
-        Value::Str(Rc::from("not-found")),
+        Value::Str(Rc::from(tag)),
     )]))
+}
+
+/// 位置ベース API の開始位置クランプ（slice_bounds の start と同じ規則: NaN→0、負は len+x、len 超過は len）
+fn clamp_start(len: usize, i: f64) -> usize {
+    let len_f = len as f64;
+    if i.is_nan() {
+        0
+    } else if i < 0.0 {
+        (len_f + i).max(0.0) as usize
+    } else {
+        (i.min(len_f)) as usize
+    }
+}
+
+fn char_v(v: &Value) -> Result<char, EvalError> {
+    match v {
+        Value::Char(c) => Ok(*c),
+        _ => Err(EvalError::Runtime("char が必要です".to_string())),
+    }
 }
 
 pub const MAX_CALL_DEPTH: usize = 10000;
@@ -420,6 +443,77 @@ impl Interp {
                 }
                 _ => Err(EvalError::Runtime("obj->map は obj が必要です".to_string())),
             },
+            BuiltinKind::CharAt => {
+                let chars: Vec<char> = str_v(&args[0])?.chars().collect();
+                let i = num(&args[1])?;
+                // 小数添字は nth と同じく切り捨て（§11.6）。NaN・範囲外は out-of-range。
+                let k = if i.is_nan() { usize::MAX } else { i.trunc() as usize };
+                if i.is_nan() || i < 0.0 || k >= chars.len() {
+                    Ok(err_v(err_tag_value("out-of-range")))
+                } else {
+                    Ok(ok_v(Value::Char(chars[k])))
+                }
+            }
+            BuiltinKind::CharCode => Ok(Value::Num(char_v(&args[0])? as u32 as f64)),
+            BuiltinKind::CodeToChar => {
+                let n = num(&args[0])?;
+                let valid = n.is_finite()
+                    && n == n.trunc()
+                    && n >= 0.0
+                    && n <= 0x10FFFF as f64
+                    && !(0xD800..=0xDFFF).contains(&(n as u32));
+                match valid.then(|| char::from_u32(n as u32)).flatten() {
+                    Some(c) => Ok(ok_v(Value::Char(c))),
+                    None => Ok(err_v(err_tag_value("invalid-code"))),
+                }
+            }
+            BuiltinKind::StrTakeWhile => {
+                let chars: Vec<char> = str_v(&args[0])?.chars().collect();
+                let start = clamp_start(chars.len(), num(&args[1])?);
+                let f = args[2].clone();
+                let mut acc = String::new();
+                let mut pos = start;
+                while pos < chars.len() && bool_v(&self.apply(f.clone(), vec![Value::Char(chars[pos])])?)? {
+                    acc.push(chars[pos]);
+                    pos += 1;
+                }
+                Ok(Value::Obj(BTreeMap::from([
+                    (Rc::from("acc"), Value::Str(Rc::from(acc.as_str()))),
+                    (Rc::from("pos"), Value::Num(pos as f64)),
+                ])))
+            }
+            BuiltinKind::StrSkipWhile => {
+                let chars: Vec<char> = str_v(&args[0])?.chars().collect();
+                let start = clamp_start(chars.len(), num(&args[1])?);
+                let f = args[2].clone();
+                let mut pos = start;
+                while pos < chars.len() && bool_v(&self.apply(f.clone(), vec![Value::Char(chars[pos])])?)? {
+                    pos += 1;
+                }
+                Ok(Value::Num(pos as f64))
+            }
+            BuiltinKind::StrSplitAt => {
+                let chars: Vec<char> = str_v(&args[0])?.chars().collect();
+                let i = num(&args[1])?;
+                let k = if i.is_nan() { None } else { Some(i.trunc() as usize) };
+                match k {
+                    Some(k) if !i.is_nan() && i >= 0.0 && k <= chars.len() => {
+                        let left: String = chars[..k].iter().collect();
+                        let right: String = chars[k..].iter().collect();
+                        Ok(ok_v(Value::Obj(BTreeMap::from([
+                            (Rc::from("left"), Value::Str(Rc::from(left.as_str()))),
+                            (Rc::from("right"), Value::Str(Rc::from(right.as_str()))),
+                        ]))))
+                    }
+                    _ => Ok(err_v(err_tag_value("out-of-range"))),
+                }
+            }
+            BuiltinKind::StrContains => Ok(Value::Bool(str_v(&args[0])?.contains(&*str_v(&args[1])?))),
+            BuiltinKind::CharLe => Ok(Value::Bool(char_v(&args[0])? <= char_v(&args[1])?)),
+            BuiltinKind::CharEq => Ok(Value::Bool(char_v(&args[0])? == char_v(&args[1])?)),
+            BuiltinKind::CharAlphabetic => Ok(Value::Bool(char_v(&args[0])?.is_alphabetic())),
+            BuiltinKind::CharNumeric => Ok(Value::Bool(char_v(&args[0])?.is_numeric())),
+            BuiltinKind::CharWhitespace => Ok(Value::Bool(char_v(&args[0])?.is_whitespace())),
             BuiltinKind::HostMock {
                 effect,
                 default,
@@ -749,6 +843,18 @@ pub fn stdlib_env() -> Rc<Env> {
     def("set-has?", BuiltinKind::SetHas);
     def("set->array", BuiltinKind::SetToArray);
     def("obj->map", BuiltinKind::ObjToMap);
+    def("char-at", BuiltinKind::CharAt);
+    def("char-code", BuiltinKind::CharCode);
+    def("code->char", BuiltinKind::CodeToChar);
+    def("str-take-while", BuiltinKind::StrTakeWhile);
+    def("str-skip-while", BuiltinKind::StrSkipWhile);
+    def("str-split-at", BuiltinKind::StrSplitAt);
+    def("str-contains?", BuiltinKind::StrContains);
+    def("char<=?", BuiltinKind::CharLe);
+    def("char=?", BuiltinKind::CharEq);
+    def("char-alphabetic?", BuiltinKind::CharAlphabetic);
+    def("char-numeric?", BuiltinKind::CharNumeric);
+    def("char-whitespace?", BuiltinKind::CharWhitespace);
     env
 }
 

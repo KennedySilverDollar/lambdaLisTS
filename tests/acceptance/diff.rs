@@ -86,3 +86,11 @@ fn map_edge_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["map-edge.lts"], "map-edge.lts");
 }
+
+// design/interp-capability.md §1.2/§3.1（C2 char + 文字列プリミティブ）: スカラー値境界（絵文字）・
+// out-of-range/invalid-code の result 往復・位置ベース API のレキサー・union/match・印字の差分一致。
+#[test]
+fn char_edge_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["char-edge.lts"], "char-edge.lts");
+}

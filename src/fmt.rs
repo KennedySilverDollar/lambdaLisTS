@@ -45,6 +45,26 @@ fn comments(trivia: &Trivia, ind: &str) -> String {
     s
 }
 
+/// char リテラルの印字（`\<文字>`）。エスケープは str と共通規則の逆写像（design §1.2）。
+pub fn print_char_lit(c: char) -> String {
+    let bs = 92u8 as char; // backslash
+    let mut out = String::new();
+    out.push(bs);
+    match c {
+        '"' => out.push('"'),
+        '\u{5c}' => out.push(bs),
+        '\u{a}' => out.push('n'),
+        '\u{9}' => out.push('t'),
+        '\u{d}' => out.push('r'),
+        c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+            out.push('u');
+            out += &format!("{:04x}", c as u32);
+        }
+        c => out.push(c),
+    }
+    out
+}
+
 pub fn print_string_lit(s: &str) -> String {
     let mut out = String::from("\"");
     for ch in s.chars() {
@@ -173,6 +193,7 @@ fn print_expr(e: &Expr, ind: &str) -> String {
     let body = match e {
         Expr::Lit { value, .. } => match value {
             LitValue::Str(s) => print_string_lit(s),
+            LitValue::Char(c) => print_char_lit(*c),
             LitValue::Nil => "nil".to_string(),
             LitValue::Bool(b) => format!("{b}"),
             LitValue::Num(n) => format!("{n}"),
@@ -304,6 +325,7 @@ fn print_type(t: &TypeExpr) -> String {
             Prim::Dec => "decimal",
             Prim::Str => "string",
             Prim::Bool => "bool",
+            Prim::Char => "char",
             Prim::Nil => "nil",
         }
         .to_string(),
@@ -347,6 +369,7 @@ fn print_pattern(p: &Pat) -> String {
         Pat::Var { name, .. } => name.to_string(),
         Pat::Lit { value, .. } => match value {
             LitValue::Str(s) => print_string_lit(s),
+            LitValue::Char(c) => print_char_lit(*c),
             LitValue::Nil => "nil".to_string(),
             LitValue::Bool(b) => format!("{b}"),
             LitValue::Num(n) => format!("{n}"),
@@ -403,7 +426,7 @@ mod tests {
 
     #[test]
     fn fmt_is_idempotent_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts", "char-edge.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name);
             assert!(once.diagnostics.is_empty(), "{name}: {:?}", once.diagnostics);
@@ -415,11 +438,23 @@ mod tests {
 
     #[test]
     fn fmt_preserves_ast_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts", "char-edge.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name).output;
             assert_eq!(ast_json(&src, name), ast_json(&once, name), "{name}");
         }
+    }
+
+    #[test]
+    fn fmt_char_literal_roundtrip() {
+        let src = "(defn f (c : char) : number (char-code \\a))\n(example (char-code \\u0041) => 65)\n";
+        let once = format_source(src, "t.lts").output;
+        assert!(once.contains("\\a"), "{once}");
+        assert!(once.contains("(c : char)"), "{once}");
+        let twice = format_source(&once, "t.lts").output;
+        assert_eq!(once, twice, "fmt は冪等");
+        // エスケープが正しく往復すること（AST 保存）
+        assert_eq!(ast_json(src, "t.lts"), ast_json(&once, "t.lts"));
     }
 
     #[test]

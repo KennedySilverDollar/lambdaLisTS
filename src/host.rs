@@ -68,6 +68,7 @@ pub fn default_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Dec => Some(Value::Dec(0)),
         Type::Str => Some(Value::Str(Rc::from(""))),
         Type::Bool => Some(Value::Bool(false)),
+        Type::Char => Some(Value::Char('a')),
         Type::Literal(_) => None,
         Type::Array(_) => Some(Value::Array(Vec::new())),
         Type::Map(..) => Some(Value::Map(Rc::new(crate::pmap::PersistentMap::new()))),

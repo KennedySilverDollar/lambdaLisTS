@@ -84,6 +84,10 @@ pub fn gen_value(ty: &Type, aliases: &AliasEnv, rng: &mut Rng, depth: usize) -> 
             }
             Some(Value::Str(Rc::from(s)))
         }
+        Type::Char => {
+            let idx = rng.gen_range(0, (STR_CHARSET.len() - 1) as u64) as usize;
+            Some(Value::Char(STR_CHARSET[idx]))
+        }
         Type::Literal(lit) => Some(Value::Str(lit)),
         Type::Array(t) => {
             let len = if rng.gen_range(0, 2) == 0 { 0 } else { rng.gen_range(0, 6) as usize };
@@ -150,6 +154,7 @@ pub fn min_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Number => Some(Value::Num(0.0)),
         Type::Dec => Some(Value::Dec(0)),
         Type::Str => Some(Value::Str(Rc::from(""))),
+        Type::Char => Some(Value::Char('a')),
         Type::Literal(lit) => Some(Value::Str(lit)),
         Type::Array(_) => Some(Value::Array(Vec::new())),
         Type::Map(..) => Some(Value::Map(Rc::new(crate::pmap::PersistentMap::new()))),
@@ -191,6 +196,7 @@ pub fn value_size(v: &Value) -> usize {
             }
         }
         Value::Str(s) => s.chars().count(),
+        Value::Char(_) => 1,
         Value::Array(xs) => 1 + xs.iter().map(value_size).sum::<usize>(),
         Value::Obj(m) => 1 + m.values().map(value_size).sum::<usize>(),
         Value::Map(m) => 1 + m.entries().iter().map(|(k, v)| value_size(&k.to_value()) + value_size(v)).sum::<usize>(),
@@ -432,6 +438,8 @@ pub fn value_to_lit(v: &Value) -> String {
         Value::Err(x) => format!("(err {})", value_to_lit(x)),
         // map/set にはリテラル構文が無いため print_value 形式で印字（REPORT.md に記録）
         Value::Map(_) | Value::Set(_) => print_value(v),
+        // char はリテラル構文 `\<文字>` があるのでそれで印字
+        Value::Char(c) => crate::fmt::print_char_lit(*c),
         Value::Dec(s) => crate::decimal::fmt_dec(*s),
         Value::Closure(_) | Value::Builtin(_) => "<fn>".to_string(),
     }

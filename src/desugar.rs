@@ -88,6 +88,7 @@ fn lit_value(v: &LitValue) -> Value {
         LitValue::Dec(text) => Value::Dec(crate::decimal::parse_dec_scientific(text).unwrap_or(0)),
         LitValue::Str(s) => Value::Str(s.clone()),
         LitValue::Bool(b) => Value::Bool(*b),
+        LitValue::Char(c) => Value::Char(*c),
         LitValue::Nil => Value::Nil,
     }
 }
@@ -267,6 +268,7 @@ impl Desugarer {
                 Prim::Dec => Type::Dec,
                 Prim::Str => Type::Str,
                 Prim::Bool => Type::Bool,
+                Prim::Char => Type::Char,
                 Prim::Nil => Type::Nil,
             },
             TypeExpr::Alias { name, .. } => Type::Alias(name.clone()),
