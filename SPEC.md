@@ -1,17 +1,17 @@
-# λ LisTS Language Specification v0.2 (P0) — Rust Edition
+# λ LisTS Language Specification v0.3 (P0+P1) — Rust Edition
 
 言語の正式名称は **λ LisTS** とする（本文中では単に LisTS とも記す）。
 
-Status: Draft for P0 implementation（v0.1 再考証修正版・Rust記法版）
+Status: Draft for P0+P1 implementation, v0.3（v0.1 再考証修正版・Rust記法版）
 Backend: JavaScript（ES2022, ESM）
 Compiler implementation: Rust（edition 2021）
-Scope: Pure core + Result + minimal effects checking
+Scope: Pure core + Result + minimal effects checking + P1（host DI・effect 実行・decimal・prop 評価。v0.3 で実装済み）
 
 ---
 
 ## 0. この仕様の位置づけ
 
-本仕様は P0（最初の実装可能な最小版）を定義する。P1以降の機能は §14 に記す。本仕様に反する実装は非準拠とする。
+本仕様は P0（最初の実装可能な最小版）を定義する。P1 の機能は §14 に記し、v0.3 時点で実装済みである。本仕様に反する実装は非準拠とする。
 
 規範的な用語：
 
@@ -45,11 +45,11 @@ Scope: Pure core + Result + minimal effects checking
 - 規範の優先順位：**言語規定（文章） ＞ 本書の Rust 型定義 ＞ テキスト版の TS 定義**。食い違いがあれば言語規定が勝つ。
 - Rust 記法上の調整（`else_` / `ResultT` / `FnT` / `Str` 等の命名、パターンへの span 追加）は §付録C に列挙する。意味論的な変更ではない。
 - コンパイラ実装の規約（依存・unsafe 禁止等）は本書ではなく `GUIDE.md`（Rust版）が持つ。
-- 本版ではさらに、v0.2 内の追補（判断ゲートで採用された意味論確定。バージョン番号は v0.2 のまま据え置く）を §0.3 に記録する。
+- 本書ではさらに、判断ゲートで採用された意味論の確定を §0.3 に記録し、P1 完了に伴い本版を v0.3 へ版上げした（§16）。
 
-### 0.3 v0.2 内の追補（バージョン番号は据え置き）
+### 0.3 v0.2 → v0.3 の変更点（P1 実装反映による版上げ）
 
-判断ゲートで採用された次の意味論判断を本版（v0.2）に追補する。バージョン番号は v0.2 のままとし、v0.3 への移行時に改めて版番号を進める。
+判断ゲートで採用された次の意味論の変更は、v0.2 からの追補として本節に記録され、P1 完了に伴い本版は v0.3 へ版上げされた（§16）。
 
 | # | 採用判断 | 反映箇所 |
 |---|---|---|
@@ -244,7 +244,7 @@ example ::= '(' 'example' expr '=>' expr ')'
 ```
 
 - `example` は P0 で実行される：期待値と構造的等価（§8.3）で比較する。
-- `prop` は P0 では**構文受理＋型検査のみ**。反例生成・縮小の評価は P1（§14）。
+- `prop` は P0 では**構文受理＋型検査のみ**。反例生成・縮小の評価は P1（§14。v0.3 で実装済み、§10.1 参照）。
 
 ### 3.8 モジュール
 
@@ -538,7 +538,7 @@ pub struct Closure {
 pub fn structural_equal(a: &Value, b: &Value) -> Result<bool, EqualError>;
 ```
 
-**循環構造における構造的等価（v0.2追補）**: `=` は共有・循環する構造を追跡し、比較経路上で同一の値対を再訪したとき（循環を検出したとき）に実行時エラー（§8.6）とする（MUST）。検出は比較経路上で行うため、単なる共有（DAG）は循環とはみなさない。バックエンド間の対応は次表のとおり。
+**循環構造における構造的等価（§0.3追補）**: `=` は共有・循環する構造を追跡し、比較経路上で同一の値対を再訪したとき（循環を検出したとき）に実行時エラー（§8.6）とする（MUST）。検出は比較経路上で行うため、単なる共有（DAG）は循環とはみなさない。バックエンド間の対応は次表のとおり。
 
 | バックエンド | 循環検出 |
 |---|---|
@@ -559,7 +559,7 @@ do 内で Err が発生した場合、残りの bind と本体をスキップし
 
 ### 8.6 数値と実行時エラー
 
-- **number は IEEE754 倍精度浮動小数点数（f64。JS準拠）であり、この単一の数値表現で確定する（v0.2追補 §0.3、MUST）**。Rust 側 `f64` は IEEE754 binary64 であり、JS と**同一の演算結果**を与える。リテラルは正しく丸められた 10進→binary64 変換で値が決まる（オーバーフローは ±Infinity）。すべての算術・比較は IEEE754 の例外なき演算に従い（`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN）、NaN・±Infinity も number 値である。2^53 を超える整数値の丸めは仕様上の値であり、`=` では NaN は NaN と等しくない（§8.3）。decimal は P1。整数型（i64/i53）への変更は §14 に従い P5（ネイティブAOT）で性能要件が発生した場合に再検討する。
+- **number は IEEE754 倍精度浮動小数点数（f64。JS準拠）であり、この単一の数値表現で確定する（§0.3、MUST）**。Rust 側 `f64` は IEEE754 binary64 であり、JS と**同一の演算結果**を与える。リテラルは正しく丸められた 10進→binary64 変換で値が決まる（オーバーフローは ±Infinity）。すべての算術・比較は IEEE754 の例外なき演算に従い（`(/ 1 0)` は Infinity、`(/ 0 0)` は NaN）、NaN・±Infinity も number 値である。2^53 を超える整数値の丸めは仕様上の値であり、`=` では NaN は NaN と等しくない（§8.3）。decimal は P1。整数型（i64/i53）への変更は §14 に従い P5（ネイティブAOT）で性能要件が発生した場合に再検討する。
 - **decimal は固定小数点（SCALE=18 固定）**（P1/M23、design/decimal.md、MUST）: 実行時の値はスケール済み整数 s（実値 = s / 10^18）であり、Rust では i128、JS では BigInt、WASM では i128 で表され、**全バックエンドでビット一致**する。表現可能な範囲は |s| ≤ i128::MAX（実値で約 ±1.7e20）。リテラルは `1.50d`（number の直後に接尾辞 `d`）。`+ - * / < <= > >=` は「両引数が decimal」のとき decimal/bool を返し（両 number なら従来どおり）、混在は type-mismatch（暗黙変換はしない。明示変換は `to-dec` / `to-num` のみ）。`=` はスケール済み整数の等価。丸めは round-half-away-from-zero（trunc 除算 + 剰余の 2r ≥ d 判定）で全バックエンド一致。`/` の 0 除算は実行時エラー `decimal-division-by-zero`、範囲超過は `decimal-overflow`（number の `(/ 1 0)=Infinity` とは異なる）。
 - **P0（純粋関数のみ）における「実行時エラー」とは、プログラムの実行が継続できない意味論上の事態であり、各バックエンドの実行環境が報告する回復不可能な失敗として観測される（MUST）。バックエンドごとの対応は次表で規定する。例外の型名・メッセージ・スタック表現はバックエンド固有であり規範外とする。**
 
@@ -671,7 +671,8 @@ JSON 直列化は serde_json とする（`Map` はデフォルトでキーソー
 {"id": 3, "op": "prop", "name": "add-money commutative"}
 {"id": 4, "op": "reload", "file": "./cart.lts"}
 {"id": 5, "op": "type-of", "src": "add"}
-{"id": 6, "op": "quit"}
+{"id": 6, "op": "host-log"}
+{"id": 7, "op": "quit"}
 ```
 
 出力：
@@ -682,6 +683,7 @@ JSON 直列化は serde_json とする（`Map` はデフォルトでキーソー
 {"id": 2, "ok": false, "failures": [{"example": "...", "actual": "…", "expected": "…"}]}
 {"id": 5, "ok": true, "type": "(fn (number number) : number)"}
 {"id": 3, "ok": false, "errors": [{"kind": "unbound-symbol", "message": "prop が見つかりません: 'add-money commutative'"}]}
+{"id": 6, "ok": true, "host": "none", "calls": []}
 ```
 
 op と意味：
@@ -691,6 +693,7 @@ op と意味：
 - `prop`: 指定した名前の prop を実評価する（P1）。リクエストに `"seed"`（u64）を含められるほか、CLI に `lists repl --seed <u64>` がある。既定シードはドキュメント化された定数（`DEFAULT_SEED`）で、乱数は自前の決定的 PRNG（splitmix64。外部乱数ライブラリ・システム時刻は使わない）のみを使う。**同じシードなら同じ生成列・同じ反例が得られる（MUST）**。成功時は `{"ok": true, "prop": name, "seed": s, "trials": n}`、失敗時は `{"ok": false, "prop": name, "seed": s, "trials": k, "counterexample": {param: value}, "shrunk": {param: value}, "fix": {...}}` を返す。prop が未定義なら `unbound-symbol` エラー。forall パラメータは生成可能な型（関数型・型変数は不可）でなければならない。
 - `reload`：ファイルを再読込し、依存も再検査する。
 - `type-of`：src の型を正規表示（§6.2）で返す。
+- `host-log`（P1）: セッション内で記録された host（モック）への呼び出しを返す。応答は `{"id": id, "ok": true, "host": "none"|"mock", "calls": [{"effect": <effect名>, "args": [<文字列>, ...]}, ...]}`（MUST）。host が未注入（`--host none` または既定）のときは `"host": "none"`・`"calls": []`。`args` の各要素は §11.6 の REPL 印字規約（`print_value`）による**文字列化**であり、型を保持する機械可読 JSON 値ではない（MUST）。このため数値 `5` と文字列 `"5"` はともに `"5"` と記録され得ることは**既知の制約**である。記録はセッション内で呼び出し順に蓄積され、決定的である（同一入力 → 同一記録）（MUST）。
 - `quit`：終了。
 
 ### 10.2 ASTパス
@@ -730,10 +733,11 @@ JSバックエンドはソースマップ v3 を出力し MUST、以下を保証
 ```
 lists compile <file.lts>... [--out <dir>]   # 検査＋JS生成
 lists fmt <file.lts>...                    # 一意フォーマット（in-place）
-lists repl                                 # JSON Lines REPL
+lists repl [--host none|mock] [--seed <u64>]   # JSON Lines REPL
 ```
 
 - `lists` は cargo でビルドされる**単一バイナリ**とする（外部ランタイム不要）。Node は生成JSの実行・テストにのみ使う。
+- `repl` のオプション: `--host none|mock` は host の注入モード（既定 `none`。未知の host 名は exit 2。`host-log` op は §10.1 参照）、`--seed <u64>` は prop 評価のシード（§10.1。不正な seed 値は exit 2）。
 - `compile` の診断は JSON 配列（Diagnostic[]）を **stdout** に出力する。エラーなしは `[]`。exit code は正常 0 / 診断あり 1。
 - 出力：`<file>.js` + `<file>.js.map` をソースと同じ相対位置に（`--out` 指定時はルートを変更）。加えて出力ルート直下に `runtime.js` を一度だけ出力する。
 - 生成JSは runtime を `import { ok, err, structuralEqual } from "<相対パス>/runtime.js"` で読む（モジュールの深さに応じた決定的な相対パス）。
@@ -937,8 +941,8 @@ const host = {
 
 ## 16. バージョニング
 
-- 本書は **v0.2 (P0) Rust Edition**。言語規定は v0.2 テキスト版と同一（§0.2）。
-- P1 完了時に v0.3。
+- 本書は **v0.3 (P0+P1) Rust Edition**。言語規約は v0.2 テキスト版（§0.2）に §0.3 の追補を加えたものと同一。
+- P1 完了により v0.3 へ版上げ済み
 - 各フェーズ完了時に仕様の該当節を更新する。
 
 ---
@@ -1096,4 +1100,4 @@ const host = {
 
 ---
 
-End of Specification v0.2 (P0) — Rust Edition
+End of Specification v0.3 (P0+P1) — Rust Edition
