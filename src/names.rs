@@ -280,6 +280,11 @@ impl<'a> Walker<'a> {
                 self.report(name, span, path.to_string(), false)
             }
             TypeExpr::Array { element, .. } => self.ty(element, &ast_path(path, &["element"])),
+            TypeExpr::Map { key, value, .. } => {
+                self.ty(key, &ast_path(path, &["key"]));
+                self.ty(value, &ast_path(path, &["value"]));
+            }
+            TypeExpr::Set { key, .. } => self.ty(key, &ast_path(path, &["key"])),
             TypeExpr::Union { members, .. } => {
                 for (i, m) in members.iter().enumerate() {
                     self.ty(m, &ast_path(path, &["members", &i.to_string()]));

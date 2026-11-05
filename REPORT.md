@@ -323,3 +323,43 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 - **テスト（追記のみ）**: `tests/tools.rs::repl_host_log_matches_documented_shape_and_is_deterministic` を新規追加。`--host mock` で `log! "5"` と `tick! 5` を実行して host-log を2回要求し、応答が文書化した形式と一致すること（calls は effect/args、args は全要素が文字列。数値 5 と文字列 "5" はともに "5" と記録されることを観測）、2回目の host-log も同一内容（呼び出し順の蓄積）、同一入力の2回実行で stdout が一致（決定性 MUST）を検査。ゴールデン `tests/golden/repl.host-log.responses.json` を新規追加（UPDATE_SNAPSHOTS=1 で生成）。既存テスト・実装（`src/repl.rs` の `host_log`）は無変更。
 - **検証**: `cargo test` 239全パス（+1）、warning 0、`bash scripts/lists-smoke.sh` 24/24。`lists-p1-smoke.sh` はリポジトリ外の独立スクリプトのため本環境では実行不可（検査5該当の host-log 文書化と v0.3 版上げは本変更で解消）。
 - **残課題**: README.md / GUIDE.md 内の「SPEC v0.2」表記は本マイルストーンでは据え置き（SPEC のみ版上げ）。別途更新する。
+
+---
+
+## 18. interp-capability §1.1（C1 map/set）の実装判断（design/interp-capability.md 採用時。SPEC.md は未変更）
+
+対象: design/interp-capability.md §1.1（`(map K V)` / `(set K)`、stdlib 11 関数 + `obj->map`）。条文は SPEC §3.3（型構文）§6（型システム）§8.2/§8.3（値・等価）§9.3（fix）§11（標準ライブラリ）§12.4/§12.5（JS lowering/runtime）に写像して実装。
+
+### 実装
+- **型**: `Type::Map(K,V)` / `Type::Set(K)` を追加。 surface 構文は design 通り小文字 `(map K V)` / `(set K)`（parser/desugar/fmt/names に対応）。print は `(map K V)` / `(set K)`。union 正規化（§6.2 の正規表現バイト列ソート）は print 経由で自動対応、unify は K・V をそれぞれ unify（§6.4）。obj との部分型関係は持たせない（別 discriminant → unify 失敗。obj との相互変換は `obj->map` のみ単方向）。
+- **キー制約**: design は `str/sym/int` だが現 SPEC には sym/int 型が存在しないため **string（リテラル含む）/ number のみ許可**（ギャップは下記参照）。違反は defn/lam/alias/effect/prop の型注釈すべてで type-mismatch + fix テンプレート（型中の map/set キーをすべて string に置換したもの。例: `(map bool number)` → `(map string number)`）（§9.3: type-mismatch には fix MUST）。実行時も map/set キーは str/num 以外を runtime error。
+- **値（interp）**: `Value::Map(Rc<PersistentMap>)` / `Value::Set(Rc<PersistentMap>)`。`src/pmap.rs` の自前永続 AVL 木（キーで平衡、挿入順は各ノードの seq で保持）。更新は path-copying で新しい木を返し既存の共有構造を壊さない（design §1.1「永続構造」）。O(log n) 更新・検索。number キーは JS Map の SameValueZero と一致させるため正規化（-0→+0、NaN→正規ビット）。
+- **等価（§8.3）**: map はキー集合と各値の再帰的等価で決定、**挿入順は無視**。set はキー集合のみ。map と set は別の値種（`=` では不一致、型検査でも unify されない）。循環は構築不可能（不変値のみ）だが既存の path-based 検出も map/set に適用。
+- **stdlib**（純粋関数として scheme 登録）: map-empty / map-get / map-set / map-del / map-keys / map-has? / map-size / set-empty / set-add / set-has? / set->array。map-keys / set->array は挿入順で返す（決定性）。map-get の失敗は `(err (obj (tag "not-found")))`、型は `(Result V (obj (tag "not-found")))`（design の `(result V not-found)` を現 SPEC の Result + obj tag 方式へ写像）。
+- **obj->map**: 単方向のみ。obj（固定キー構造体型）は存続。戻り値型は obj フィールド値型の union を値型とする `(map string (union ...))` で、check.rs の App 直下の特殊処理で組み立てる（rank-1 多相では「フィールド値の union」を直接表現できないため）。高階位置に渡した場合の fallback scheme は `(fn (T) : (map string U))`（値型 U は文脈で unify）。実行時は obj の BTreeMap キー順（UTF-8 バイト順）= ソート順で挿入。
+- **JS バックエンド（§12.4/§12.5）**: map は内部 `Map`（design §7 の写像表通り）。**set は内部 `Set`**（design §7 の「set も Map」からの逸脱: map と set を `=` で区別するために Set が必要。型検査上は比較し得ないが値レベルで区別を維持）。挿入順反復は JS Map/Set の挿入順で interp と一致（上書きは元の順序を維持 = seq に相当）。構造的等価は runtime.js の structuralEqual に Map/Set 分岐を追加（deep-equal、順序無視、WeakMap で循環検出）。obj->map はキーを codepoint 順にソートしてから Map に入れる（Rust の BTreeMap と一致）。
+- **印字（§11.6 は map/set を未定義のため新規決定）**: 挿入順の s 式 `(map (k v) ...)` / `(set k ...)`、空は `(map)` / `(set)`。interp `print_value` と JS `$print_m` で同一形式。
+- **JSON（example 出力・機械可読性）**: `{"tag":"Map","entries":[[k,v],...]}` / `{"tag":"Set","items":[...]}`（挿入順）。JS 側は map 系使用時のみ `$mjson` を出力（既存の DEC_JS/PRINT_JS は無改変）、Rust 側は `backends.rs::value_to_json`、テストの `json_to_value` にも対応。
+- **lexer**: 名前中の `->`（`obj->map`、`set->array` 等）を単一シンボルとして許可するよう scan_name を拡張。単独の `->` は従来通りパイプ（`is_symbol_start('-')==false` なので不変）。`js_name` は `->` → `_to_`（§12.3 拡張）。
+- **既存出力への影響**: map/set 系 stdlib を使わないプログラムのコンパイル出力はバイト不変（golden テストで検証）。map 使用時のみ `$mjson`/`$print_m`/`$obj_to_map` を追加出力し、2 回コンパイルでバイト一致を確認。
+
+### テスト追加
+- `tests/fixtures/map-edge.lts`（41 example: 基本操作・挿入順・上書き順序維持・map-del・number キー/-0・set・構造的等価（順序無視）・永続性・obj->map・印字・2000 要素の末尾再帰 fold（§8.5）＋ `diff::map_edge_diff_interp_vs_backend`（interp vs compile+node で全 example 一致）
+- `acceptance::map_set_key_type_violation_is_type_mismatch_with_fix`（キー型違反の type-mismatch + fix テンプレート、string/number/alias キーの許可）
+- `acceptance::obj_to_map_infers_union_value_type`（obj->map の union 値型・非 obj への適用は type-mismatch）
+- 単体: pmap.rs（AVL 永続性・挿入順・-0/NaN 正規化・serde 往復）、types.rs（print/normalize/structural_equal）、unify.rs（map/set unify と occurs）、value.rs（map/set 等価・印字）、lexer.rs（`->` in name）、emit.rs（js_name）、fmt.rs（map/set 型の冪等・AST 保存。map-edge.lts を fixture 一覧に追加）
+
+### 検証
+- `cargo test` 254 全パス（既存 239 から +15、壊れなし）。warning 0。
+- `lists compile map-edge.lts` を 2 回実行し出力ディレクトリがバイト一致（決定的）。node で 41/41 example ok。
+- `lists fmt` in-place を 2 回適用しても安定（冪等）。golden（cart.js 等）は無改変でパス。
+- `LISTS_BACKEND=mock` でも acceptance パス（t11 は既存 fixture のみ）。
+
+### ギャップ・残課題（SPEC には報告のみ。独断で直していない）
+1. design §1.1 のキー型 `str/sym/int`: 現 SPEC（v0.3）には `sym` も `int`（i64）も存在しない（i64 は §14 P5）。実装では string/number のみ許可し、sym/int は将来の P5/C2/C4 で吸収する方針。
+2. design の `int` 戻り値（map-size 等）は現 SPEC では `number` のみのため `number` で実装。
+3. design の `(result V not-found)` は現 SPEC の構文 `(Result V (obj (tag "not-found")))` に写像。判断 kind 名は tag リテラルとして表現。
+4. design §7 の写像表「set は内部 Map」からは逸脱し JS では `Set` を使用（map/set の `=` 区別のため）。意味論は design 通り（挿入順・deep-equal）。
+5. SPEC §3.3 の型コンストラクタ命名規則（Array/Result/Option は大文字、union/obj/fn は小文字）と design §1.1 の小文字 `map`/`set` の混在は、SPEC 側の統一が未決定のため design に従った。SPEC 改訂時に統一を検討。
+6. SPEC §11.6 の印字規約は map/set を未定義のため、挿入順 s 式で新規決定（上記）。SPEC 改訂時に追記候補。
+7. unify 後（型変数が具体化された後）の map/set キー制約の再検証は未実施。現状は注釈時の検証＋実行時エラーで担保。

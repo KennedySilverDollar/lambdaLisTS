@@ -6,7 +6,35 @@ use crate::ir::{Core, Pat, PatKind};
 use crate::lexer::tokenize;
 use crate::parser::parse_program;
 use crate::resolver::resolve_import_path;
+use crate::pmap::{MapKey, PersistentMap};
 use crate::value::{print_value, structural_equal, Builtin, BuiltinKind, Closure, Env, Value};
+
+fn map_v(v: &Value) -> Result<Rc<PersistentMap>, EvalError> {
+    match v {
+        Value::Map(m) => Ok(m.clone()),
+        _ => Err(EvalError::Runtime("map が必要です".to_string())),
+    }
+}
+
+fn set_v(v: &Value) -> Result<Rc<PersistentMap>, EvalError> {
+    match v {
+        Value::Set(s) => Ok(s.clone()),
+        _ => Err(EvalError::Runtime("set が必要です".to_string())),
+    }
+}
+
+fn map_key(v: &Value) -> Result<MapKey, EvalError> {
+    MapKey::from_value(v).ok_or_else(|| {
+        EvalError::Runtime("map/set のキーは string か number です（design/interp-capability.md §1.1）".to_string())
+    })
+}
+
+fn not_found_value() -> Value {
+    Value::Obj(BTreeMap::from([(
+        Rc::from("tag"),
+        Value::Str(Rc::from("not-found")),
+    )]))
+}
 
 pub const MAX_CALL_DEPTH: usize = 10000;
 
@@ -333,6 +361,65 @@ impl Interp {
                 }
                 Ok(ok_v(Value::Array(out)))
             }
+            BuiltinKind::MapEmpty => Ok(Value::Map(Rc::new(PersistentMap::new()))),
+            BuiltinKind::SetEmpty => Ok(Value::Set(Rc::new(PersistentMap::new()))),
+            BuiltinKind::MapGet => {
+                let m = map_v(&args[0])?;
+                let key = map_key(&args[1])?;
+                match m.get(&key) {
+                    Some(v) => Ok(ok_v(v.clone())),
+                    None => Ok(err_v(not_found_value())),
+                }
+            }
+            BuiltinKind::MapSet => {
+                let m = map_v(&args[0])?;
+                let key = map_key(&args[1])?;
+                let (next, _) = m.insert(key, args[2].clone());
+                Ok(Value::Map(Rc::new(next)))
+            }
+            BuiltinKind::MapDel => {
+                let m = map_v(&args[0])?;
+                let key = map_key(&args[1])?;
+                let (next, _) = m.remove(&key);
+                Ok(Value::Map(Rc::new(next)))
+            }
+            BuiltinKind::MapKeys => {
+                let m = map_v(&args[0])?;
+                Ok(Value::Array(m.keys().iter().map(|k| k.to_value()).collect()))
+            }
+            BuiltinKind::MapHas => {
+                let m = map_v(&args[0])?;
+                let key = map_key(&args[1])?;
+                Ok(Value::Bool(m.has(&key)))
+            }
+            BuiltinKind::MapSize => Ok(Value::Num(map_v(&args[0])?.len() as f64)),
+            BuiltinKind::SetAdd => {
+                let s = set_v(&args[0])?;
+                let key = map_key(&args[1])?;
+                let (next, _) = s.insert(key, Value::Nil);
+                Ok(Value::Set(Rc::new(next)))
+            }
+            BuiltinKind::SetHas => {
+                let s = set_v(&args[0])?;
+                let key = map_key(&args[1])?;
+                Ok(Value::Bool(s.has(&key)))
+            }
+            BuiltinKind::SetToArray => {
+                let s = set_v(&args[0])?;
+                Ok(Value::Array(s.keys().iter().map(|k| k.to_value()).collect()))
+            }
+            BuiltinKind::ObjToMap => match &args[0] {
+                Value::Obj(fields) => {
+                    // BTreeMap のキー順（UTF-8 バイト順）= 決定的な挿入順
+                    let mut m = PersistentMap::new();
+                    for (k, v) in fields {
+                        let (next, _) = m.insert(MapKey::Str(k.clone()), v.clone());
+                        m = next;
+                    }
+                    Ok(Value::Map(Rc::new(m)))
+                }
+                _ => Err(EvalError::Runtime("obj->map は obj が必要です".to_string())),
+            },
             BuiltinKind::HostMock {
                 effect,
                 default,
@@ -650,6 +737,18 @@ pub fn stdlib_env() -> Rc<Env> {
     def("traverse", BuiltinKind::Traverse);
     def("to-dec", BuiltinKind::ToDec);
     def("to-num", BuiltinKind::ToNum);
+    def("map-empty", BuiltinKind::MapEmpty);
+    def("map-get", BuiltinKind::MapGet);
+    def("map-set", BuiltinKind::MapSet);
+    def("map-del", BuiltinKind::MapDel);
+    def("map-keys", BuiltinKind::MapKeys);
+    def("map-has?", BuiltinKind::MapHas);
+    def("map-size", BuiltinKind::MapSize);
+    def("set-empty", BuiltinKind::SetEmpty);
+    def("set-add", BuiltinKind::SetAdd);
+    def("set-has?", BuiltinKind::SetHas);
+    def("set->array", BuiltinKind::SetToArray);
+    def("obj->map", BuiltinKind::ObjToMap);
     env
 }
 

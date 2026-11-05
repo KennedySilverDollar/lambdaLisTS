@@ -47,6 +47,92 @@ fn t1_add_money_js_execution_value() {
     );
 }
 
+// design/interp-capability.md §1.1: map/set のキーは str/sym/int のみ（現 SPEC では
+// string/number）。それ以外は type-mismatch + fix テンプレート（キーを string に置換）。
+#[test]
+fn map_set_key_type_violation_is_type_mismatch_with_fix() {
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn bad (m : (map bool number)) : number 1)",
+        "test.lts",
+        &mut cache,
+    );
+    let d = res
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == DiagKind::TypeMismatch)
+        .expect("type-mismatch");
+    let data = d.data.as_ref().expect("data");
+    assert_eq!(data["expected"], "(map string number)");
+    assert_eq!(data["actual"], "bool");
+    assert!(matches!(
+        &d.fix,
+        Some(lists::diagnostic::Patch::Replace { template, .. }) if template == "(map string number)"
+    ));
+
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(type Bad (set (Array number)))",
+        "test.lts",
+        &mut cache,
+    );
+    let d = res
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == DiagKind::TypeMismatch)
+        .expect("type-mismatch");
+    assert!(matches!(
+        &d.fix,
+        Some(lists::diagnostic::Patch::Replace { template, .. }) if template == "(set string)"
+    ));
+
+    // string/number/リテラルキーは許可され、エラーなし
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn ok1 (m : (map string number)) : number 1)\n\
+         (defn ok2 (s : (set number)) : number 1)\n\
+         (type K string)\n\
+         (defn ok3 (m : (map K number)) : number 1)",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(
+        res.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        res.diagnostics
+    );
+}
+
+// obj->map は obj のフィールド値型の union を値型とする (map string (union ...)) になる。
+#[test]
+fn obj_to_map_infers_union_value_type() {
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn f (o : (obj (a : number) (b : string))) : (map string (union number string))\n\
+         (obj->map o))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+    let types = lists::check::type_of_all(&res);
+    assert_eq!(
+        types.get("f"),
+        Some(&"(fn ((obj (a : number) (b : string))) : (map string (union number string)))".to_string())
+    );
+
+    // obj 以外に適用すると type-mismatch
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn g (x : number) : (map string number) (obj->map x))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res
+        .diagnostics
+        .iter()
+        .any(|d| d.kind == DiagKind::TypeMismatch));
+}
+
 #[test]
 fn t2_stock_non_exhaustive_with_fix_golden() {
     let res = check_fixture("stock.lts");

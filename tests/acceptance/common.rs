@@ -164,6 +164,36 @@ pub fn json_to_value(v: &Json) -> Value {
         Json::String(s) => Value::Str(Rc::from(s.as_str())),
         Json::Array(a) => Value::Array(a.iter().map(json_to_value).collect()),
         Json::Object(m) => {
+            if m.get("tag") == Some(&Json::String("Map".to_string())) {
+                if let Some(Json::Array(entries)) = m.get("entries") {
+                    let mut pm = lists::pmap::PersistentMap::new();
+                    for e in entries {
+                        if let Json::Array(pair) = e {
+                            if let (Some(k), Some(v)) = (pair.first(), pair.get(1)) {
+                                let kv = json_to_value(k);
+                                if let Some(mk) = lists::pmap::MapKey::from_value(&kv) {
+                                    let (next, _) = pm.insert(mk, json_to_value(v));
+                                    pm = next;
+                                }
+                            }
+                        }
+                    }
+                    return Value::Map(Rc::new(pm));
+                }
+            }
+            if m.get("tag") == Some(&Json::String("Set".to_string())) {
+                if let Some(Json::Array(items)) = m.get("items") {
+                    let mut pm = lists::pmap::PersistentMap::new();
+                    for it in items {
+                        let kv = json_to_value(it);
+                        if let Some(mk) = lists::pmap::MapKey::from_value(&kv) {
+                            let (next, _) = pm.insert(mk, Value::Nil);
+                            pm = next;
+                        }
+                    }
+                    return Value::Set(Rc::new(pm));
+                }
+            }
             if let (Some(tag), Some(val)) = (m.get("tag"), m.get("value")) {
                 if tag == "Ok" {
                     return Value::Ok(Box::new(json_to_value(val)));

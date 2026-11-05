@@ -111,6 +111,31 @@ pub fn type_of_all(result: &ModuleResult) -> BTreeMap<String, String> {
 
 const VARIADIC: &[(&str, &str)] = &[("str-concat", "string"), ("array", "fresh")];
 
+/// fix テンプレート用: 型中の map/set キーをすべて string に置き換える。
+fn map_key_to_string(t: &Type) -> Type {
+    match t {
+        Type::Map(_, v) => Type::Map(Box::new(Type::Str), Box::new(map_key_to_string(v))),
+        Type::Set(_) => Type::Set(Box::new(Type::Str)),
+        Type::Array(el) => Type::Array(Box::new(map_key_to_string(el))),
+        Type::Union(ms) => Type::Union(ms.iter().map(map_key_to_string).collect()),
+        Type::Obj(fields) => Type::Obj(
+            fields
+                .iter()
+                .map(|(k, v)| (k.clone(), map_key_to_string(v)))
+                .collect(),
+        ),
+        Type::ResultT(ok, err) => Type::ResultT(
+            Box::new(map_key_to_string(ok)),
+            Box::new(map_key_to_string(err)),
+        ),
+        Type::FnT(params, ret) => Type::FnT(
+            params.iter().map(map_key_to_string).collect(),
+            Box::new(map_key_to_string(ret)),
+        ),
+        other => other.clone(),
+    }
+}
+
 type MatchArms<'c> = Vec<(String, BTreeMap<Rc<str>, Type>, &'c Core)>;
 
 pub struct Checker<'a> {
@@ -174,6 +199,16 @@ impl<'a> Checker<'a> {
                     continue;
                 }
                 self.aliases.insert(name.clone(), ty.clone());
+            }
+        }
+        // 型エイリアス定義中の map/set キー型も検証する（§1.1 キー制約）。
+        for d in defs {
+            if let CoreDef::Type {
+                ty, span, path, ..
+            } = d
+            {
+                let n = normalize_type(ty, &self.aliases);
+                self.validate_container_keys(&n, span, path);
             }
         }
         // Load imports first so defn signatures can reference imported names and types.
@@ -498,6 +533,8 @@ impl<'a> Checker<'a> {
             match t {
                 Type::Var(id) => map.get(id).cloned().unwrap_or_else(|| t.clone()),
                 Type::Array(el) => Type::Array(Box::new(rename(el, map))),
+                Type::Map(k, v) => Type::Map(Box::new(rename(k, map)), Box::new(rename(v, map))),
+                Type::Set(k) => Type::Set(Box::new(rename(k, map))),
                 Type::Union(ms) => Type::Union(ms.iter().map(|m| rename(m, map)).collect()),
                 Type::Obj(fields) => Type::Obj(
                     fields
@@ -552,7 +589,69 @@ impl<'a> Checker<'a> {
                 Severity::Error,
             );
         }
+        self.validate_container_keys(&n, span, path);
         n
+    }
+
+    /// design/interp-capability.md §1.1: map/set のキーは str/sym/int のみ。
+    /// 現 SPEC には sym/int が無いため string/number（リテラル含む）のみ許可（REPORT.md に記録）。
+    /// 違反は type-mismatch + fix テンプレート（キーを string に置換した型）を付ける（SPEC §9.3）。
+    fn validate_container_keys(&mut self, t: &Type, span: &Span, path: &str) {
+        match t {
+            Type::Map(k, v) => {
+                self.check_map_key(k, span, path, t);
+                self.validate_container_keys(k, span, path);
+                self.validate_container_keys(v, span, path);
+            }
+            Type::Set(k) => {
+                self.check_map_key(k, span, path, t);
+                self.validate_container_keys(k, span, path);
+            }
+            Type::Array(el) => self.validate_container_keys(el, span, path),
+            Type::Union(ms) => {
+                for m in ms {
+                    self.validate_container_keys(m, span, path);
+                }
+            }
+            Type::Obj(fields) => {
+                for v in fields.values() {
+                    self.validate_container_keys(v, span, path);
+                }
+            }
+            Type::ResultT(ok, err) => {
+                self.validate_container_keys(ok, span, path);
+                self.validate_container_keys(err, span, path);
+            }
+            Type::FnT(params, ret) => {
+                for p in params {
+                    self.validate_container_keys(p, span, path);
+                }
+                self.validate_container_keys(ret, span, path);
+            }
+            _ => {}
+        }
+    }
+
+    fn check_map_key(&mut self, key: &Type, span: &Span, path: &str, whole: &Type) {
+        let k = normalize_type(key, &self.aliases);
+        let ok = matches!(k, Type::Str | Type::Number | Type::Literal(_) | Type::Var(_));
+        if ok {
+            return;
+        }
+        let fixed = map_key_to_string(whole);
+        let exp = print_type(&fixed, &self.aliases);
+        let act = print_type(key, &self.aliases);
+        self.diag(
+            DiagKind::TypeMismatch,
+            span.clone(),
+            format!("map/set のキー型は string か number のみです: 期待 {exp}、実際 {act}"),
+            Some(json!({ "path": path, "expected": exp, "actual": act })),
+            Some(Patch::Replace {
+                path: path.to_string(),
+                template: print_type_plain(&fixed),
+            }),
+            Severity::Error,
+        );
     }
 
     fn diag(
@@ -696,6 +795,28 @@ impl<'a> Checker<'a> {
                         } else {
                             Type::Str
                         };
+                    }
+                    // design/interp-capability.md §1.1: obj->map は obj から map への単方向変換。
+                    // 値型は obj フィールド値型の union として組み立てる（多相では表現できないため特殊処理）。
+                    if name.as_ref() == "obj->map" && args.len() == 1 {
+                        let at = prune(
+                            &self.infer(&args[0], &ast_path(path, &["args", "0"])),
+                            &self.subst,
+                        );
+                        let Type::Obj(fields) = &at else {
+                            let want = Type::Obj(BTreeMap::new());
+                            self.type_mismatch(span, path, &want, &at);
+                            return Type::Nil;
+                        };
+                        let val_t = if fields.is_empty() {
+                            Type::Nil
+                        } else {
+                            Type::Union(normalize_union(
+                                fields.values().cloned().collect(),
+                                &self.aliases,
+                            ))
+                        };
+                        return Type::Map(Box::new(Type::Str), Box::new(val_t));
                     }
                 }
                 let ft = prune(&self.infer(f, &ast_path(path, &["fn"])), &self.subst);

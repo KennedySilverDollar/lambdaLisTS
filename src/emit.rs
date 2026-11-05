@@ -30,10 +30,16 @@ const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\
 
 // decimal（M23）用のローカルヘルパ。BigInt のスケール済み整数で interp(i128) とビット一致する。
 // エラーメッセージは interp 側（src/decimal.rs の ERR_*）と同一文字列。
+// design/interp-capability.md §1.1/§7: map は内部 Map、set は内部 Set（map との等価性の区別のため。
+// design §7 の「set も Map」からの逸脱は REPORT.md に記録）。挿入順反復に一致させる。
+// map/set 系 stdlib を使うときだけ出力し、既存の出力バイトには影響しない。
+const MAP_JS: &str = "function $mjson(v) {\n  if (typeof v === \"bigint\") { const neg = v < 0n; const a = neg ? -v : v; const i = a / 1000000000000000000n; const f = a % 1000000000000000000n; return JSON.stringify({ tag: \"Dec\", value: (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\") }); }\n  if (v instanceof Map) return \"{\\\"tag\\\":\\\"Map\\\",\\\"entries\\\":[\" + [...v].map(([k, x]) => \"[\" + $mjson(k) + \",\" + $mjson(x) + \"]\").join(\",\") + \"}]}\";\n  if (v instanceof Set) return \"{\\\"tag\\\":\\\"Set\\\",\\\"items\\\":[\" + [...v].map($mjson).join(\",\") + \"}]}\";\n  if (Array.isArray(v)) return \"[\" + v.map($mjson).join(\",\") + \"]\";\n  if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $mjson(v[k])).join(\",\") + \"}\"; }\n  return JSON.stringify(v);\n}\nfunction $print_m(v) {\n  if (v instanceof Map) return v.size === 0 ? \"(map)\" : \"(map \" + [...v].map(([k, x]) => \"(\" + $print_m(k) + \" \" + $print_m(x) + \")\").join(\" \") + \")\";\n  if (v instanceof Set) return v.size === 0 ? \"(set)\" : \"(set \" + [...v].map($print_m).join(\" \") + \")\";\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (typeof v === \"bigint\") return $print_dec(v);\n  if (Array.isArray(v)) return \"[\" + v.map($print_m).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print_m(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print_m(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print_m(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $obj_to_map(o) {\n  const ks = Object.keys(o);\n  ks.sort((a, b) => { const pa = [...a]; const pb = [...b]; const n = Math.min(pa.length, pb.length); for (let i = 0; i < n; i++) { const d = pa[i].codePointAt(0) - pb[i].codePointAt(0); if (d !== 0) return d; } return pa.length - pb.length; });\n  const m = new Map();\n  for (const k of ks) m.set(k, o[k]);\n  return m;\n}\n";
+
 const DEC_JS: &str = "const $DEC_S = 10n ** 18n;\nconst $DEC_MAX = 170141183460469231731687303715884105727n;\nfunction $dec_check(r) { if (r > $DEC_MAX || r < -$DEC_MAX) throw new Error(\"decimal-overflow\"); return r; }\nconst $dec_add = (a, b) => $dec_check(a + b);\nconst $dec_sub = (a, b) => $dec_check(a - b);\nconst $dec_mul = (a, b) => { const p = a * b; const neg = p < 0n; const ap = neg ? -p : p; let q = ap / $DEC_S; const r = ap % $DEC_S; if (2n * r >= $DEC_S) q += 1n; return $dec_check(neg ? -q : q); };\nconst $dec_div = (a, b) => { if (b === 0n) throw new Error(\"decimal-division-by-zero\"); const neg = (a < 0n) !== (b < 0n); const num = (a < 0n ? -a : a) * $DEC_S; const den = b < 0n ? -b : b; let q = num / den; const r = num % den; if (2n * r >= den) q += 1n; return $dec_check(neg ? -q : q); };\nfunction $print_dec(v) { const neg = v < 0n; const a = neg ? -v : v; const i = a / $DEC_S; const f = a % $DEC_S; return (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\"); }\nconst $to_dec = (a) => { if (typeof a !== \"number\" || Number.isNaN(a) || !Number.isFinite(a)) throw new Error(\"decimal-overflow\"); const m = /^([+-]?)(\\d+)(?:\\.(\\d+))?e([+-]?\\d+)$/.exec(a.toExponential()); if (!m) throw new Error(\"decimal-overflow\"); const sign = m[1] === \"-\" ? -1n : 1n; const digits = m[2] + (m[3] || \"\"); const exp = parseInt(m[4], 10) - (m[3] || \"\").length + 18; const mant = BigInt(digits); let r; if (exp >= 0) { r = mant * 10n ** BigInt(exp); } else { const den = 10n ** BigInt(-exp); let q = mant / den; const rem = mant % den; if (2n * rem >= den) q += 1n; r = q; } return $dec_check(sign * r); };\nfunction $json(v) { if (typeof v === \"bigint\") return JSON.stringify({ tag: \"Dec\", value: $print_dec(v) }); if (Array.isArray(v)) return \"[\" + v.map($json).join(\",\") + \"]\"; if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $json(v[k])).join(\",\") + \"}\"; } return JSON.stringify(v); }\n";
 
 pub fn js_name(name: &str) -> String {
-    let mut n = name.replace('-', "_");
+    // 名前中の "->"（obj->map 等）は _to_ へ（§12.3 の kebab-case 変換の拡張）
+    let mut n = name.replace("->", "_to_").replace('-', "_");
     if n.ends_with('?') {
         n = format!("{}_q", &n[..n.len() - 1]);
     }
@@ -41,6 +47,24 @@ pub fn js_name(name: &str) -> String {
         n = format!("${n}");
     }
     n
+}
+
+fn is_map_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "map-empty"
+            | "map-get"
+            | "map-set"
+            | "map-del"
+            | "map-keys"
+            | "map-has?"
+            | "map-size"
+            | "set-empty"
+            | "set-add"
+            | "set-has?"
+            | "set->array"
+            | "obj->map"
+    )
 }
 
 fn stdlib_alias(name: &str) -> Option<&'static str> {
@@ -616,6 +640,10 @@ impl<'a> Gen<'a> {
         }
     }
 
+    fn map_used(&self) -> bool {
+        self.stdlib_used.iter().any(|n| is_map_builtin(n))
+    }
+
     fn var_ref(&mut self, name: &str) -> String {
         if self.user_names.contains(name) {
             return js_name(name);
@@ -645,6 +673,9 @@ impl<'a> Gen<'a> {
         }
         if self.stdlib_used.contains("str") {
             out += PRINT_JS;
+        }
+        if self.map_used() {
+            out += MAP_JS;
         }
         for name in &self.stdlib_used {
             out += &format!("const {} = {};\n", stdlib_js_name(name), self.stdlib_impl(name));
@@ -700,10 +731,11 @@ impl<'a> Gen<'a> {
             "max" => "(a, b) => { if (Number.isNaN(a)) return b; if (Number.isNaN(b)) return a; return a > b ? a : b; }".to_string(),
             "not" => "(a) => !a".to_string(),
             "str" => {
+                let f = if self.map_used() { "$print_m" } else { "$print" };
                 if self.decimal_used {
-                    "(a) => typeof a === \"bigint\" ? $print_dec(a) : $print(a)".to_string()
+                    format!("(a) => typeof a === \"bigint\" ? $print_dec(a) : {f}(a)")
                 } else {
-                    "(a) => $print(a)".to_string()
+                    format!("(a) => {f}(a)")
                 }
             }
             "to-dec" => "(a) => $to_dec(a)".to_string(),
@@ -732,6 +764,24 @@ impl<'a> Gen<'a> {
             ),
             "any?" => "(arr, f) => arr.some((x) => f(x))".to_string(),
             "all?" => "(arr, f) => arr.every((x) => f(x))".to_string(),
+            // design/interp-capability.md §1.1/§7: map は内部 Map（挿入順反復）、set は内部 Set。
+            // map-set の既存キー上書きは JS Map と同じく元の順序を維持する。
+            "map-empty" => "() => new Map()".to_string(),
+            "map-get" => {
+                let ok = self.runtime_ref("ok");
+                let err = self.runtime_ref("err");
+                format!("(m, k) => m.has(k) ? {ok}(m.get(k)) : {err}({{ tag: \"not-found\" }})")
+            }
+            "map-set" => "(m, k, v) => { const n = new Map(m); n.set(k, v); return n; }".to_string(),
+            "map-del" => "(m, k) => { const n = new Map(m); n.delete(k); return n; }".to_string(),
+            "map-keys" => "(m) => [...m.keys()]".to_string(),
+            "map-has?" => "(m, k) => m.has(k)".to_string(),
+            "map-size" => "(m) => m.size".to_string(),
+            "set-empty" => "() => new Set()".to_string(),
+            "set-add" => "(s, k) => { const n = new Set(s); n.add(k); return n; }".to_string(),
+            "set-has?" => "(s, k) => s.has(k)".to_string(),
+            "set->array" => "(s) => [...s]".to_string(),
+            "obj->map" => "(o) => $obj_to_map(o)".to_string(),
             other => format!(
                 "(() => {{ throw new Error('unsupported stdlib: ' + {other:?}); }})"
             ),
@@ -859,7 +909,13 @@ impl<'a> Gen<'a> {
                 self.expr(expected, "  ", w);
                 w.write(";\n");
                 self.in_async = saved_async;
-                let ser = if self.decimal_used { "$json(actual)" } else { "JSON.stringify(actual)" };
+                let ser = if self.map_used() {
+                    "$mjson(actual)"
+                } else if self.decimal_used {
+                    "$json(actual)"
+                } else {
+                    "JSON.stringify(actual)"
+                };
                 w.line(&format!(
                     "  if (!{se}(actual, expected)) throw new Error(\"example {i} failed: \" + {ser});"
                 ));
@@ -1302,6 +1358,8 @@ mod tests {
         assert_eq!(js_name("new"), "$new");
         assert_eq!(js_name("zero"), "zero");
         assert_eq!(js_name("fold-left"), "fold_left");
+        assert_eq!(js_name("obj->map"), "obj_to_map");
+        assert_eq!(js_name("set->array"), "set_to_array");
     }
 
     #[test]

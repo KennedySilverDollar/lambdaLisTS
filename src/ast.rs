@@ -169,6 +169,17 @@ pub enum TypeExpr {
         trivia: Trivia,
         span: Span,
     },
+    Map {
+        key: Box<TypeExpr>,
+        value: Box<TypeExpr>,
+        trivia: Trivia,
+        span: Span,
+    },
+    Set {
+        key: Box<TypeExpr>,
+        trivia: Trivia,
+        span: Span,
+    },
     ResultT {
         ok: Box<TypeExpr>,
         err: Box<TypeExpr>,
@@ -196,6 +207,8 @@ impl TypeExpr {
             | TypeExpr::Array { span, .. }
             | TypeExpr::Union { span, .. }
             | TypeExpr::Obj { span, .. }
+            | TypeExpr::Map { span, .. }
+            | TypeExpr::Set { span, .. }
             | TypeExpr::ResultT { span, .. }
             | TypeExpr::FnT { span, .. }
             | TypeExpr::Error { span, .. } => span,

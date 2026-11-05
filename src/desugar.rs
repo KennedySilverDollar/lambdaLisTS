@@ -303,6 +303,11 @@ impl Desugarer {
                 }
                 Type::Obj(map)
             }
+            TypeExpr::Map { key, value, .. } => Type::Map(
+                Box::new(self.type_(key, &ast_path(path, &["key"]))),
+                Box::new(self.type_(value, &ast_path(path, &["value"]))),
+            ),
+            TypeExpr::Set { key, .. } => Type::Set(Box::new(self.type_(key, &ast_path(path, &["key"])))),
             TypeExpr::ResultT { ok, err, .. } => Type::ResultT(
                 Box::new(self.type_(ok, &ast_path(path, &["ok"]))),
                 Box::new(self.type_(err, &ast_path(path, &["err"]))),

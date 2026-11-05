@@ -4,6 +4,7 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ir::{Core, Param};
+use crate::pmap::PersistentMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
@@ -14,6 +15,8 @@ pub enum Value {
     Nil,
     Array(Vec<Value>),
     Obj(BTreeMap<Rc<str>, Value>),
+    Map(Rc<PersistentMap>),         // 永続 map（design/interp-capability.md §1.1）
+    Set(Rc<PersistentMap>),         // 永続 set（値は Nil。キー集合のみ意味を持つ）
     Ok(Box<Value>),
     Err(Box<Value>),
     Closure(Rc<Closure>),
@@ -69,6 +72,18 @@ pub enum BuiltinKind {
     Traverse,
     ToDec,
     ToNum,
+    MapEmpty,
+    MapGet,
+    MapSet,
+    MapDel,
+    MapKeys,
+    MapHas,
+    MapSize,
+    SetEmpty,
+    SetAdd,
+    SetHas,
+    SetToArray,
+    ObjToMap,
     /// モック host のハンドラ（host.rs）。呼び出しを log に記録し、default を返す。
     /// log は実行時の記録なのでシリアライズしない。
     HostMock {
@@ -191,6 +206,47 @@ fn eq_visit(a: &Value, b: &Value, path: &mut Vec<(usize, usize)>) -> Result<bool
             path.pop();
             Ok(ok)
         }
+        (Value::Map(x), Value::Map(y)) => {
+            if x.len() != y.len() {
+                return Ok(false);
+            }
+            let pair = (node_id(a), node_id(b));
+            if path.contains(&pair) {
+                return Err(EqualError::Cyclic);
+            }
+            path.push(pair);
+            // 構造的等価はキー集合と値で決まり、挿入順は無視する（design §1.1）
+            let mut ok = true;
+            for (k, v) in x.entries() {
+                match y.get(&k) {
+                    Some(yv) => {
+                        if !eq_visit(&v, yv, path)? {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            path.pop();
+            Ok(ok)
+        }
+        (Value::Set(x), Value::Set(y)) => {
+            if x.len() != y.len() {
+                return Ok(false);
+            }
+            let pair = (node_id(a), node_id(b));
+            if path.contains(&pair) {
+                return Err(EqualError::Cyclic);
+            }
+            path.push(pair);
+            let ok = x.keys().iter().all(|k| y.has(k));
+            path.pop();
+            Ok(ok)
+        }
         (Value::Ok(x), Value::Ok(y)) => eq_boxed(x, y, a, b, path),
         (Value::Err(x), Value::Err(y)) => eq_boxed(x, y, a, b, path),
         (Value::Dec(x), Value::Dec(y)) => Ok(x == y),
@@ -250,6 +306,35 @@ pub fn print_value(v: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // 印字規約は SPEC §11.6 には未定義のため、挿入順の s 式で統一（REPORT.md に記録）。
+        // 空は (map) / (set)。
+        Value::Map(m) => {
+            let entries = m.entries();
+            if entries.is_empty() {
+                return "(map)".to_string();
+            }
+            format!(
+                "(map {})",
+                entries
+                    .iter()
+                    .map(|(k, v)| format!("({} {})", print_value(&k.to_value()), print_value(v)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        }
+        Value::Set(s) => {
+            let keys = s.keys();
+            if keys.is_empty() {
+                return "(set)".to_string();
+            }
+            format!(
+                "(set {})",
+                keys.iter()
+                    .map(|k| print_value(&k.to_value()))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        }
         Value::Closure(_) | Value::Builtin(_) => "<fn>".to_string(),
     }
 }
@@ -394,6 +479,52 @@ mod tests {
         );
         assert_eq!(print_value(&Value::Ok(Box::new(Value::Num(1.0)))), "(ok 1)");
         assert_eq!(print_value(&Value::Err(Box::new(Value::Str(Rc::from("x"))))), "(err x)");
+    }
+
+    fn pmap(pairs: Vec<(&str, Value)>) -> Rc<PersistentMap> {
+        use crate::pmap::MapKey;
+        let mut m = PersistentMap::new();
+        for (k, v) in pairs {
+            let (next, _) = m.insert(MapKey::Str(Rc::from(k)), v);
+            m = next;
+        }
+        Rc::new(m)
+    }
+
+    #[test]
+    fn map_set_structural_equal_is_order_insensitive() {
+        let a = Value::Map(pmap(vec![("a", Value::Num(1.0)), ("b", Value::Num(2.0))]));
+        let b = Value::Map(pmap(vec![("b", Value::Num(2.0)), ("a", Value::Num(1.0))]));
+        let c = Value::Map(pmap(vec![("a", Value::Num(1.0)), ("b", Value::Num(3.0))]));
+        let d = Value::Map(pmap(vec![("a", Value::Num(1.0))]));
+        assert!(eq(&a, &b));
+        assert!(!eq(&a, &c));
+        assert!(!eq(&a, &d));
+        // map と set は別型（unify できない）なので値でも不一致
+        let s = Value::Set(pmap(vec![("a", Value::Nil), ("b", Value::Nil)]));
+        assert!(!eq(&a, &s));
+        let s2 = Value::Set(pmap(vec![("b", Value::Nil), ("a", Value::Nil)]));
+        assert!(eq(&s, &s2));
+        // ネストした map の再帰的等価
+        let n1 = Value::Map(pmap(vec![("m", a.clone())]));
+        let n2 = Value::Map(pmap(vec![("m", b.clone())]));
+        assert!(eq(&n1, &n2));
+    }
+
+    #[test]
+    fn print_value_map_set_insertion_order() {
+        let m = Value::Map(pmap(vec![("b", Value::Num(2.0)), ("a", Value::Str(Rc::from("x")))]));
+        assert_eq!(print_value(&m), "(map (b 2) (a x))");
+        assert_eq!(print_value(&Value::Map(PersistentMap::new().into())), "(map)");
+        let s = Value::Set(pmap(vec![("z", Value::Nil), ("a", Value::Nil)]));
+        assert_eq!(print_value(&s), "(set z a)");
+        assert_eq!(print_value(&Value::Set(PersistentMap::new().into())), "(set)");
+        // number キーは number 印字規約（§11.6）に従う
+        use crate::pmap::MapKey;
+        let nm = PersistentMap::new();
+        let (nm, _) = nm.insert(MapKey::from_value(&Value::Num(1.5)).unwrap(), Value::Num(0.0));
+        let mn = Value::Map(Rc::new(nm));
+        assert_eq!(print_value(&mn), "(map (1.5 0))");
     }
 
 }

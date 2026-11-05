@@ -989,6 +989,49 @@ impl<'a> Parser<'a> {
                             span: l.span.clone(),
                         }
                     }
+                    "map" => {
+                        if args.len() != 2 {
+                            self.error(
+                                l.span.clone(),
+                                "map は (map K V) 形です".to_string(),
+                                Some(json!({ "expected": 2, "actual": args.len() })),
+                                None,
+                            );
+                        }
+                        let key = match args.first() {
+                            Some(a) => self.build_type(a, &format!("{path}.key")),
+                            None => type_error("キー型がありますません", l.span.clone(), l.trivia.clone()),
+                        };
+                        let value = match args.get(1) {
+                            Some(a) => self.build_type(a, &format!("{path}.value")),
+                            None => type_error("値型がありますません", l.span.clone(), l.trivia.clone()),
+                        };
+                        TypeExpr::Map {
+                            key: Box::new(key),
+                            value: Box::new(value),
+                            trivia: l.trivia.clone(),
+                            span: l.span.clone(),
+                        }
+                    }
+                    "set" => {
+                        if args.len() != 1 {
+                            self.error(
+                                l.span.clone(),
+                                "set は (set K) 形です".to_string(),
+                                Some(json!({ "expected": 1, "actual": args.len() })),
+                                None,
+                            );
+                        }
+                        let key = match args.first() {
+                            Some(a) => self.build_type(a, &format!("{path}.key")),
+                            None => type_error("キー型がありますません", l.span.clone(), l.trivia.clone()),
+                        };
+                        TypeExpr::Set {
+                            key: Box::new(key),
+                            trivia: l.trivia.clone(),
+                            span: l.span.clone(),
+                        }
+                    }
                     "Result" => {
                         if args.len() != 2 {
                             self.error(

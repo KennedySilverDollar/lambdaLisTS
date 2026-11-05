@@ -375,8 +375,20 @@ impl<'a> Lexer<'a> {
 
     fn scan_name(&mut self) -> (usize, usize) {
         let start = self.pos;
-        while self.peek().is_some_and(is_symbol_char) {
-            self.bump();
+        while let Some(c) = self.peek() {
+            if is_symbol_char(c) {
+                self.bump();
+            } else if c == '>'
+                && self.src[..self.pos].ends_with('-')
+                && self.peek_second().is_some_and(is_symbol_char)
+            {
+                // 名前中の "->" はシンボルの一部（design/interp-capability.md §1.1 の
+                // obj->map / set->array 等）。単独の '->' は list 先頭のパイプなので
+                // is_symbol_start('-') == false のため従来通り Punct::Arrow になる。
+                self.bump();
+            } else {
+                break;
+            }
         }
         (start, self.pos)
     }
@@ -894,6 +906,19 @@ mod tests {
         );
         assert_eq!(&*r.tokens[0].text, "->");
         assert_eq!(&*r.tokens[1].text, "=>");
+    }
+
+    #[test]
+    fn arrow_inside_symbol_is_part_of_name() {
+        // design/interp-capability.md §1.1: obj->map / set->array は単一シンボル
+        let r = lex("(obj->map o) (set->array s) (-> a b)");
+        let texts: Vec<&str> = r.tokens.iter().map(|t| &*t.text).collect();
+        assert_eq!(
+            texts,
+            ["(", "obj->map", "o", ")", "(", "set->array", "s", ")", "(", "->", "a", "b", ")"]
+        );
+        assert!(r.diagnostics.is_empty());
+        assert_eq!(r.tokens[9].value, Some(TokenValue::Punct(Punct::Arrow)));
     }
 
     #[test]

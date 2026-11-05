@@ -324,6 +324,8 @@ fn print_type(t: &TypeExpr) -> String {
                 .collect::<Vec<_>>()
                 .join(" ")
         ),
+        TypeExpr::Map { key, value, .. } => format!("(map {} {})", print_type(key), print_type(value)),
+        TypeExpr::Set { key, .. } => format!("(set {})", print_type(key)),
         TypeExpr::ResultT { ok, err, .. } => {
             format!("(Result {} {})", print_type(ok), print_type(err))
         }
@@ -401,7 +403,7 @@ mod tests {
 
     #[test]
     fn fmt_is_idempotent_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name);
             assert!(once.diagnostics.is_empty(), "{name}: {:?}", once.diagnostics);
@@ -413,11 +415,24 @@ mod tests {
 
     #[test]
     fn fmt_preserves_ast_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name).output;
             assert_eq!(ast_json(&src, name), ast_json(&once, name), "{name}");
         }
+    }
+
+    #[test]
+    fn fmt_map_set_type_syntax() {
+        let out = format_source(
+            "(defn f (m : (map string number)) (s : (set number)) : number 1)",
+            "t.lts",
+        )
+        .output;
+        assert!(out.contains("(m : (map string number))"), "{out}");
+        assert!(out.contains("(s : (set number))"), "{out}");
+        let twice = format_source(&out, "t.lts").output;
+        assert_eq!(out, twice, "fmt は冪等");
     }
 
     #[test]

@@ -78,3 +78,11 @@ fn decimal_edge_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["decimal-edge.lts"], "decimal-edge.lts");
 }
+
+// design/interp-capability.md §1.1（C1 map/set）: 基本操作・挿入順・構造的等価・永続性・
+// obj->map・末尾再帰 fold（§8.5）・印字の interp/JS 差分一致。
+#[test]
+fn map_edge_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["map-edge.lts"], "map-edge.lts");
+}

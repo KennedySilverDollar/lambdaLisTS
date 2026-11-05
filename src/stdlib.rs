@@ -19,6 +19,22 @@ fn res(ok: Type, err: Type) -> Type {
     Type::ResultT(Box::new(ok), Box::new(err))
 }
 
+fn map_t(k: Type, v: Type) -> Type {
+    Type::Map(Box::new(k), Box::new(v))
+}
+
+fn set_t(k: Type) -> Type {
+    Type::Set(Box::new(k))
+}
+
+/// map-get の失敗は (err (obj (tag "not-found")))（design §1.1/§6 の判断 kind）
+fn not_found_err() -> Type {
+    Type::Obj(BTreeMap::from([(
+        Rc::from("tag"),
+        Type::Literal(Rc::from("not-found")),
+    )]))
+}
+
 fn opt(t: Type, nil_t: &Type) -> Type {
     Type::Union(vec![t, nil_t.clone()])
 }
@@ -118,5 +134,56 @@ pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
                 res(arr(v(3)), v(2)),
             ),
         ),
+        // design/interp-capability.md §1.1: map / set（純粋関数。キーは string/number のみ）
+        entry("map-empty", vec![1, 2], fn_t(vec![], map_t(v(1), v(2)))),
+        entry(
+            "map-get",
+            vec![1, 2],
+            fn_t(vec![map_t(v(1), v(2)), v(1)], res(v(2), not_found_err())),
+        ),
+        entry(
+            "map-set",
+            vec![1, 2],
+            fn_t(vec![map_t(v(1), v(2)), v(1), v(2)], map_t(v(1), v(2))),
+        ),
+        entry(
+            "map-del",
+            vec![1, 2],
+            fn_t(vec![map_t(v(1), v(2)), v(1)], map_t(v(1), v(2))),
+        ),
+        entry(
+            "map-keys",
+            vec![1, 2],
+            fn_t(vec![map_t(v(1), v(2))], arr(v(1))),
+        ),
+        entry(
+            "map-has?",
+            vec![1, 2],
+            fn_t(vec![map_t(v(1), v(2)), v(1)], bool_t.clone()),
+        ),
+        entry(
+            "map-size",
+            vec![1, 2],
+            // design は int だが現 SPEC は number のみ（i64 は P5）。REPORT.md に記録。
+            fn_t(vec![map_t(v(1), v(2))], num.clone()),
+        ),
+        entry("set-empty", vec![1], fn_t(vec![], set_t(v(1)))),
+        entry(
+            "set-add",
+            vec![1],
+            fn_t(vec![set_t(v(1)), v(1)], set_t(v(1))),
+        ),
+        entry(
+            "set-has?",
+            vec![1],
+            fn_t(vec![set_t(v(1)), v(1)], bool_t.clone()),
+        ),
+        entry(
+            "set->array",
+            vec![1],
+            fn_t(vec![set_t(v(1))], arr(v(1))),
+        ),
+        // obj -> map は単方向変換。値型は obj フィールド型の union（check.rs で特殊処理）。
+        entry("obj->map", vec![1, 2], fn_t(vec![v(1)], map_t(str_t.clone(), v(2)))),
     ])
 }

@@ -70,6 +70,8 @@ pub fn default_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Bool => Some(Value::Bool(false)),
         Type::Literal(_) => None,
         Type::Array(_) => Some(Value::Array(Vec::new())),
+        Type::Map(..) => Some(Value::Map(Rc::new(crate::pmap::PersistentMap::new()))),
+        Type::Set(_) => Some(Value::Set(Rc::new(crate::pmap::PersistentMap::new()))),
         Type::Union(members) => {
             if members.iter().any(|m| matches!(normalize_type(m, aliases), Type::Nil)) {
                 Some(Value::Nil)
