@@ -1,0 +1,60 @@
+[
+  {
+    "defined": "h",
+    "id": 1,
+    "ok": true,
+    "type": "(fn ((obj (log : (fn (string) : nil)) (tick : (fn (number) : nil)))) : (Result nil string))"
+  },
+  {
+    "id": 2,
+    "ok": true
+  },
+  {
+    "id": 3,
+    "ok": true,
+    "results": [
+      {
+        "example": "example 0",
+        "pass": true
+      }
+    ]
+  },
+  {
+    "calls": [
+      {
+        "args": [
+          "5"
+        ],
+        "effect": "log"
+      },
+      {
+        "args": [
+          "5"
+        ],
+        "effect": "tick"
+      }
+    ],
+    "host": "mock",
+    "id": 4,
+    "ok": true
+  },
+  {
+    "calls": [
+      {
+        "args": [
+          "5"
+        ],
+        "effect": "log"
+      },
+      {
+        "args": [
+          "5"
+        ],
+        "effect": "tick"
+      }
+    ],
+    "host": "mock",
+    "id": 5,
+    "ok": true
+  }
+]

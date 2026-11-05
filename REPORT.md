@@ -310,3 +310,16 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 ### 残課題
 - 10進浮動小数点（動的レンジ）が必要になった場合は別型として追加検討（P5 付近）。現状の固定小数点の範囲は実値 ±1.7e20。
 - JS バックエンドでの prop 実行は依然として未実装（REPL/interp のみ）。
+
+---
+
+## 17. P1 実用スモーク検査5のギャップ処置（host-log 文書化）と v0.3 版上げ
+
+背景: 独立実用スモーク `lists-p1-smoke.sh`（25/26）の検査5で判明したギャップ: REPL `host-log` op が SPEC §10.1 に未記載、および P1 完了に伴う版上げが未実施。採用済み判断: (a) host-log の args は §11.6 の REPL 印字規約（`print_value`）による文字列形式のまま（MUST。数値 5 と文字列 "5" が同一記録 "5" になり得ることは既知の制約として条文に明記。型を保持する機械可読 JSON 値への変更は不採用）、(b) SPEC を v0.3 へ版上げ（§16 の規定）。**実装変更なし**（文書が実装に追いつく形。条文と実装の食い違いはなかったため差分提案もなし）。
+
+- **SPEC §10.1**: op 一覧と入出力例に `host-log` を追記。応答形式 `{"id","ok":true,"host":"none"|"mock","calls":[{"effect":<effect名>,"args":[<印字文字列>,...]}]}`（MUST）、host 未注入（`--host none`/既定）時は `"host":"none"`・`"calls":[]`、args は §11.6 の REPL 印字規約（`print_value`）による文字列化で型を保持しないことと数値/文字列の同一表記の既知の制約、セッション内で呼び出し順に蓄積され決定的（同一入力→同一記録）（MUST）を明記。
+- **SPEC §10.5**: CLI 一覧を `lists repl [--host none|mock] [--seed <u64>]` へ更新し、未知 host 名・不正 seed 値は exit 2 と明記（`--seed` は §10.1 に既述あり）。
+- **v0.3 版上げ（§16）**: 表題・Status・Scope・§16 ・末尾「End of Specification」の版表記を v0.3 (P0+P1) へ更新。§0.3 を「v0.2 内への追補（据え置き）」から「v0.2→v0.3 の変更点」へ改題し、表の通し番号 1–6 と条項参照（§8.3/§8.6/§11.1/§11.6/§12.4/§12.5/§14）の整合を確認済み。本文中の「v0.2追補」参照は §0.3 表記へ整理。§0 冒頭は「P1 は §14 に記し v0.3 で実装済み」へ更新。
+- **テスト（追記のみ）**: `tests/tools.rs::repl_host_log_matches_documented_shape_and_is_deterministic` を新規追加。`--host mock` で `log! "5"` と `tick! 5` を実行して host-log を2回要求し、応答が文書化した形式と一致すること（calls は effect/args、args は全要素が文字列。数値 5 と文字列 "5" はともに "5" と記録されることを観測）、2回目の host-log も同一内容（呼び出し順の蓄積）、同一入力の2回実行で stdout が一致（決定性 MUST）を検査。ゴールデン `tests/golden/repl.host-log.responses.json` を新規追加（UPDATE_SNAPSHOTS=1 で生成）。既存テスト・実装（`src/repl.rs` の `host_log`）は無変更。
+- **検証**: `cargo test` 239全パス（+1）、warning 0、`bash scripts/lists-smoke.sh` 24/24。`lists-p1-smoke.sh` はリポジトリ外の独立スクリプトのため本環境では実行不可（検査5該当の host-log 文書化と v0.3 版上げは本変更で解消）。
+- **残課題**: README.md / GUIDE.md 内の「SPEC v0.2」表記は本マイルストーンでは据え置き（SPEC のみ版上げ）。別途更新する。

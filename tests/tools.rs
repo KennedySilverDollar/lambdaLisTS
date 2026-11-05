@@ -419,3 +419,51 @@ fn repl_prop_unknown_name_is_error_and_bad_seed_exits_2() {
     let bad = run_lists(&["repl", "--seed", "notanumber"], None);
     assert_eq!(bad.status.code(), Some(2), "不正な --seed は exit 2");
 }
+
+#[test]
+fn repl_host_log_matches_documented_shape_and_is_deterministic() {
+    // SPEC §10.1（v0.3 追記）: host-log 応答は {"id","ok":true,"host":"mock","calls":[{"effect","args":[...]}]}
+    // と一致する。args は §11.6 の REPL 印字規約（print_value）による文字列化なので、
+    // 数値 5 と文字列 "5" はともに "5" と記録される（文書化した既知の制約）。
+    // 記録はセッション内で呼び出し順に蓄積され、同一入力に決定的（MUST）。
+    let defn = r#"(effect log : (fn (s : string) : nil))
+(effect tick : (fn (n : number) : nil))
+(defn! h (host : (obj (log : (fn (s : string) : nil)) (tick : (fn (n : number) : nil)))) : (Result nil string) (do [_ (log! "5")] [_ (tick! 5)] (ok nil)))"#;
+    let input = format!(
+        "{{\"id\": 1, \"op\": \"eval\", \"src\": {}}}\n\
+         {{\"id\": 2, \"op\": \"eval\", \"src\": \"(example (h host) => (ok nil))\"}}\n\
+         {{\"id\": 3, \"op\": \"test\"}}\n\
+         {{\"id\": 4, \"op\": \"host-log\"}}\n\
+         {{\"id\": 5, \"op\": \"host-log\"}}\n\
+         {{\"id\": 6, \"op\": \"quit\"}}\n",
+        serde_json::to_string(defn).expect("json")
+    );
+    let out1 = run_lists(&["repl", "--host", "mock"], Some(&input));
+    assert_eq!(out1.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out1.stderr));
+    let out2 = run_lists(&["repl", "--host", "mock"], Some(&input));
+    assert_eq!(out1.stdout, out2.stdout, "host-log 記録は同一入力に決定的（同一入力→同一記録 MUST）");
+    let responses = repl_responses(&out1);
+    assert_eq!(responses.len(), 5, "quit は応答しない: {responses:?}");
+    assert_eq!(responses[0]["ok"], true, "effect+defn! eval: {responses:?}");
+    assert_eq!(responses[1]["ok"], true, "example eval: {responses:?}");
+    assert_eq!(responses[2]["ok"], true, "test: {responses:?}");
+    let expected_calls = serde_json::json!([
+        {"effect": "log", "args": ["5"]},
+        {"effect": "tick", "args": ["5"]}
+    ]);
+    for (i, id) in [(3usize, 4u64), (4usize, 5u64)] {
+        let r = &responses[i];
+        assert_eq!(r["id"], serde_json::json!(id));
+        assert_eq!(r["ok"], serde_json::json!(true));
+        assert_eq!(r["host"], serde_json::json!("mock"));
+        assert_eq!(r["calls"], expected_calls, "文書化した応答形式と一致し呼び出し順に蓄積: {r}");
+        for c in r["calls"].as_array().expect("calls は配列") {
+            assert!(c["effect"].is_string());
+            assert!(
+                c["args"].as_array().expect("args は配列").iter().all(|a| a.is_string()),
+                "args の各要素は §11.6 print_value による文字列: {c}"
+            );
+        }
+    }
+    assert_golden_json("repl.host-log.responses.json", serde_json::Value::Array(responses));
+}
