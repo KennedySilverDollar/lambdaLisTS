@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use serde_json::json;
 
@@ -9,7 +10,7 @@ use crate::ir::Core;
 use crate::sourcemap_out::MapBuilder;
 use crate::span::Span;
 use crate::stdlib::stdlib;
-use crate::types::Type;
+use crate::types::{AliasEnv, Type};
 use crate::value::Value;
 
 const JS_RESERVED: &[&str] = &[
@@ -193,12 +194,42 @@ pub struct EmitInput {
     pub type_names: BTreeSet<String>,
     /// import 先も含む「defn! の名前」集合（async 生成の要否判定用。ローカルの defn! は pure フラグから自動で足す）。
     pub impure_names: BTreeSet<String>,
+    /// prop 評価のシード（codegen 出力に $SEED として埋め込む。既定: rng::DEFAULT_SEED）
+    pub seed: u64,
+    /// 型エイリアス環境（prop 型ディスクリプタ生成用）
+    pub aliases: crate::types::AliasEnv,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmitOutput {
     pub js: String,
     pub map: String,
+    /// prop が含まれる場合 true（バックエンドは prop-runtime.js を配置する）
+    pub uses_prop: bool,
+}
+
+/// 型を prop-runtime.js の生成規則用ディスクリプタへ（alias は展開済み）
+fn type_json(t: &Type, aliases: &AliasEnv) -> serde_json::Value {
+    use serde_json::json;
+    match crate::types::normalize_type(t, aliases) {
+        Type::Number => json!({"t":"number"}),
+        Type::Str => json!({"t":"string"}),
+        Type::Bool => json!({"t":"bool"}),
+        Type::Nil => json!({"t":"nil"}),
+        Type::Char => json!({"t":"char"}),
+        Type::Dec => json!({"t":"decimal"}),
+        Type::Builder => json!({"t":"builder"}),
+        Type::Bytes => json!({"t":"bytes"}),
+        Type::Literal(l) => json!({"t":"lit","v":l}),
+        Type::Array(el) => json!({"t":"array","el":type_json(el.as_ref(), aliases)}),
+        Type::Union(ms) => json!({"t":"union","members":ms.iter().map(|m| type_json(m, aliases)).collect::<Vec<_>>()}),
+        Type::Obj(fs) => json!({"t":"obj","fields":fs.iter().map(|(k, v)| (k.to_string(), type_json(v, aliases))).collect::<serde_json::Map<String, serde_json::Value>>()}),
+        Type::Map(k, v) => json!({"t":"map","k":type_json(k.as_ref(), aliases),"v":type_json(v.as_ref(), aliases)}),
+        Type::Set(k) => json!({"t":"set","k":type_json(k.as_ref(), aliases)}),
+        Type::Ref(inner) => json!({"t":"ref","inner":type_json(inner.as_ref(), aliases)}),
+        Type::ResultT(ok, err) => json!({"t":"result","ok":type_json(ok.as_ref(), aliases),"err":type_json(err.as_ref(), aliases)}),
+        _ => json!({"t":"other"}),
+    }
 }
 
 fn contains_error_node(e: &Core) -> bool {
@@ -399,10 +430,41 @@ pub fn emit(input: &EmitInput) -> Result<EmitOutput, Vec<Diagnostic>> {
     for d in &forms {
         gen.form_js(d, &mut w);
     }
+    let uses_prop = gen.has_props;
+    if uses_prop {
+        // --seed を埋め込み（REPL の --seed と同じ既定値 rng::DEFAULT_SEED）
+        w.line(&format!("const $SEED = {}n;", input.seed));
+        let specs: Vec<String> = gen
+            .prop_specs
+            .iter()
+            .map(|(name, params, body, js)| {
+                let params_json: Vec<String> = params
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "{{ name: {}, ty: {} }}",
+                            serde_json::to_string(p.name.as_ref()).unwrap_or_else(|_| "\"?\"".to_string()),
+                            type_json(&p.ty, &gen.aliases)
+                        )
+                    })
+                    .collect();
+                let core_json = serde_json::to_string(body.as_ref()).unwrap_or_else(|_| "null".to_string());
+                format!(
+                    "{{ name: {}, params: [{}], fn: {}, core: {} }}",
+                    serde_json::to_string(name).unwrap_or_else(|_| "\"?\"".to_string()),
+                    params_json.join(", "),
+                    js,
+                    core_json
+                )
+            })
+            .collect();
+        w.line(&format!("const $PROPS = [{}];", specs.join(", ")));
+        w.line("await runProps($PROPS, $SEED, 100);");
+    }
     let (body, map_builder) = w.into_parts();
     let map = map_builder.to_json();
     let js = format!("{body}\n//# sourceMappingURL={}.map\n", input.file);
-    Ok(EmitOutput { js, map })
+    Ok(EmitOutput { js, map, uses_prop })
 }
 
 struct JsWriter {
@@ -654,6 +716,9 @@ struct Gen<'a> {
     builtin_ref_used: bool,
     clock_used: bool,
     read_file_used: bool,
+    has_props: bool,
+    prop_specs: Vec<(String, Vec<crate::ir::Param>, Rc<Core>, String)>,
+    aliases: crate::types::AliasEnv,
 }
 
 impl<'a> Gen<'a> {
@@ -689,6 +754,7 @@ impl<'a> Gen<'a> {
         let builtin_ref_used = defs_use_builtin_ref(&input.defs);
         let clock_used = defs_use_clock(&input.defs);
         let read_file_used = defs_use_read_file(&input.defs);
+        let has_props = input.defs.iter().any(|d| matches!(d, CoreDef::Prop { .. }));
         Gen {
             user_names,
             export_names,
@@ -707,6 +773,9 @@ impl<'a> Gen<'a> {
             builtin_ref_used,
             clock_used,
             read_file_used,
+            has_props,
+            prop_specs: Vec::new(),
+            aliases: input.aliases.clone(),
             decimal_used: defs_use_decimal(&input.defs),
         }
     }
@@ -767,6 +836,9 @@ impl<'a> Gen<'a> {
         if self.read_file_used {
             out += "import * as $fs from \"node:fs/promises\";\n";
             out += READFILE_JS;
+        }
+        if self.has_props {
+            out += "import { runProps } from \"./prop-runtime.js\";\n";
         }
         if self.stdlib_used.contains("str") {
             out += PRINT_JS;
@@ -1041,6 +1113,36 @@ impl<'a> Gen<'a> {
                     value_names.join(", "),
                     serde_json::to_string(&js_path).unwrap_or_else(|_| format!("\"{js_path}\""))
                 ));
+            }
+            CoreDef::Prop {
+                name,
+                params,
+                body,
+                ..
+            } => {
+                // M22 prop の JS 評価: 本体を関数として出力し、$PROPS に登録する
+                let js = format!("$prop_{}", self.prop_specs.len());
+                self.prop_specs.push((
+                    name.to_string(),
+                    params.clone(),
+                    Rc::new(body.clone()),
+                    js.clone(),
+                ));
+                let params_js = params
+                    .iter()
+                    .map(|p| js_name(&p.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let p_async = core_has_effect_call(body) || core_calls_impure(body, &self.impure_defs);
+                let async_kw = if p_async { "async " } else { "" };
+                w.line(&format!("{async_kw}function {js}({params_js}) {{"));
+                let saved_tail = self.cur_tail.take();
+                let saved_async = self.in_async;
+                self.in_async = p_async;
+                self.stmt(body, "  ", w);
+                self.in_async = saved_async;
+                self.cur_tail = saved_tail;
+                w.line("}");
             }
             CoreDef::Example {
                 actual,
@@ -1583,6 +1685,8 @@ mod tests {
             source_file: "test.lts".to_string(),
             type_names: BTreeSet::new(),
             impure_names: BTreeSet::new(),
+            seed: crate::rng::DEFAULT_SEED,
+            aliases: Default::default(),
         })
     }
 

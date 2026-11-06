@@ -48,7 +48,7 @@ pub trait Backend {
     /// バックエンド名（`--backend <name>` / `LISTS_BACKEND` で指定される名前）。
     fn name(&self) -> &str;
     /// sources を out_dir にコンパイルする。診断があれば Err で返す（成果物は出せる範囲で書く）。
-    fn compile(&self, sources: &[SourceFile], out_dir: &Path) -> Result<Artifacts, Vec<Diagnostic>>;
+    fn compile(&self, sources: &[SourceFile], out_dir: &Path, seed: u64) -> Result<Artifacts, Vec<Diagnostic>>;
     /// 成果物を実行して標準出力を得る。子プロセス実行・環境変数継承・stderr 取り込みは各実装の契約どおり。
     fn run(&self, artifacts: &Artifacts) -> std::io::Result<RunOutput>;
 }
@@ -101,6 +101,8 @@ pub struct Frontend {
     pub type_names: BTreeSet<String>,
     /// import 先も含む defn! 名の集合（emit の async 判定用 §7.2/§12.4）。
     pub impure_names: BTreeSet<String>,
+    /// 型エイリアス環境（prop の型ディスクリプタ生成用）
+    pub aliases: crate::types::AliasEnv,
 }
 
 /// 共通のフロントエンド（lex → parse → desugar → check）をソースごとに回し、診断を集める。
@@ -131,6 +133,7 @@ fn frontend(sources: &[SourceFile]) -> (Vec<Diagnostic>, Vec<Frontend>) {
             defs,
             type_names,
             impure_names: BTreeSet::new(),
+            aliases: checked.type_aliases.clone(),
         });
     }
     // import 先モジュールも含めた defn! 名を集める（check の cache に全モジュールが入っている）
@@ -152,7 +155,7 @@ impl Backend for JsBackend {
         "js"
     }
 
-    fn compile(&self, sources: &[SourceFile], out_dir: &Path) -> Result<Artifacts, Vec<Diagnostic>> {
+    fn compile(&self, sources: &[SourceFile], out_dir: &Path, seed: u64) -> Result<Artifacts, Vec<Diagnostic>> {
         let _ = std::fs::create_dir_all(out_dir);
         let (mut diagnostics, frontends) = frontend(sources);
         let mut entries: Vec<String> = Vec::new();
@@ -164,11 +167,16 @@ impl Backend for JsBackend {
                 source_file: sf.name.clone(),
                 type_names: fe.type_names.clone(),
                 impure_names: fe.impure_names.clone(),
+                seed,
+                aliases: fe.aliases.clone(),
             }) {
                 Ok(out) => {
                     let p = out_dir.join(&out_name);
                     let _ = std::fs::write(&p, &out.js);
                     let _ = std::fs::write(format!("{}.map", p.display()), &out.map);
+                    if out.uses_prop {
+                        let _ = std::fs::write(out_dir.join("prop-runtime.js"), crate::runtime::PROP_RUNTIME_JS);
+                    }
                     entries.push(out_name);
                 }
                 Err(errs) => diagnostics.extend(errs),
@@ -252,7 +260,7 @@ impl Backend for MockBackend {
         "mock"
     }
 
-    fn compile(&self, sources: &[SourceFile], out_dir: &Path) -> Result<Artifacts, Vec<Diagnostic>> {
+    fn compile(&self, sources: &[SourceFile], out_dir: &Path, _seed: u64) -> Result<Artifacts, Vec<Diagnostic>> {
         let (diagnostics, _frontends) = frontend(sources);
         *self.sources.borrow_mut() = sources.iter().map(|s| s.path.clone()).collect();
         let _ = std::fs::create_dir_all(out_dir);

@@ -35,6 +35,10 @@ pub fn pipeline_file(abs: &str) -> (Vec<CoreDef>, Vec<Diagnostic>) {
 
 /// Backend トレイト経由でコンパイルする。
 pub fn compile_via(backend: &dyn Backend, names: &[&str], dir: &Path) -> Artifacts {
+    compile_via_seed(backend, names, dir, lists::rng::DEFAULT_SEED)
+}
+
+pub fn compile_via_seed(backend: &dyn Backend, names: &[&str], dir: &Path, seed: u64) -> Artifacts {
     let sources: Vec<SourceFile> = names
         .iter()
         .map(|n| SourceFile {
@@ -43,7 +47,7 @@ pub fn compile_via(backend: &dyn Backend, names: &[&str], dir: &Path) -> Artifac
         })
         .collect();
     backend
-        .compile(&sources, dir)
+        .compile(&sources, dir, seed)
         .unwrap_or_else(|errs| panic!("compile {names:?}: {errs:?}"))
 }
 

@@ -321,6 +321,8 @@ fn read_file_effect_reads_virtual_files_and_io_error_on_missing() {
         source_file: "test.lts".to_string(),
         type_names: BTreeSet::new(),
         impure_names: BTreeSet::from(["load-len".to_string()]),
+        seed: lists::rng::DEFAULT_SEED,
+        aliases: Default::default(),
     })
     .expect("emit");
     assert!(out.js.contains("node:fs/promises"), "{}", out.js);
@@ -428,6 +430,8 @@ fn t5_broken_lts_recovery() {
         source_file: "broken.lts".to_string(),
         type_names: BTreeSet::new(),
         impure_names: BTreeSet::new(),
+        seed: lists::rng::DEFAULT_SEED,
+        aliases: Default::default(),
     });
     let errs = r.expect_err("broken は emit エラーのはず");
     assert!(errs.iter().any(|d| d.kind == DiagKind::ParseError));

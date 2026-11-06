@@ -119,3 +119,78 @@ fn bytes_edge_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["bytes-edge.lts"], "bytes-edge.lts");
 }
+
+// M22 prop の JS バックエンド実行: 同一 seed で interp（prop_result_json）と compile+node の
+// `prop i: ok|FAIL <json>` 行が同一バイト列になること（反例・縮小・seed を含む）。
+#[test]
+fn prop_diff_interp_vs_node_same_seed_byte_identical() {
+    let seed: u64 = 0xDEAD_BEEF_1234_5678;
+    let abs = fixture_path("props-edge.lts");
+    let src = std::fs::read_to_string(&abs).expect("fixture");
+
+    // interp 側: 各 prop を run_prop して prop_result_json をコンパクト直列化
+    let mut cache = lists::check::ModuleCache::default();
+    let res = lists::check::check_source(&src, "props-edge.lts", &mut cache);
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+    let lex = lists::lexer::tokenize(&src, "props-edge.lts");
+    let (program, _) = lists::parser::parse_program(&lex);
+    let (defs, _) = lists::desugar::desugar(&program);
+    let env = lists::eval::global_env();
+    lists::eval::load_defs(&defs, &env);
+    let mut interp_jsons: Vec<String> = Vec::new();
+    for (i, d) in defs.iter().enumerate() {
+        if let lists::desugar::CoreDef::Prop {
+            name, params, body, ..
+        } = d
+        {
+            let outcome = lists::prop::run_prop(
+                name,
+                params,
+                body,
+                &env,
+                &res.type_aliases,
+                seed,
+                lists::prop::DEFAULT_MAX_TRIALS,
+            );
+            let j = lists::prop::prop_result_json(
+                serde_json::json!(i),
+                name,
+                seed,
+                params,
+                body,
+                outcome,
+            );
+            interp_jsons.push(serde_json::to_string(&j).expect("ser"));
+        }
+    }
+    assert_eq!(interp_jsons.len(), 4);
+
+    // JS 側: --seed を埋め込んで compile+node
+    let dir = temp_dir("prop-diff");
+    let artifacts = compile_via_seed(&lists::backends::JsBackend, &["props-edge.lts"], &dir, seed);
+    let run = lists::backends::Backend::run(&lists::backends::JsBackend, &artifacts).expect("run");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let stdout = run.stdout;
+    let js_jsons: Vec<String> = stdout
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("prop ").and_then(|rest| {
+                let (idx, rest) = rest.split_once(": ")?;
+                let (status, json) = rest.split_once(' ')?;
+                assert!(status == "ok" || status == "FAIL", "{l}");
+                let _ = idx;
+                Some(json.to_string())
+            })
+        })
+        .collect();
+    assert_eq!(js_jsons.len(), 4, "{stdout}");
+    assert_eq!(interp_jsons, js_jsons, "同一 seed で反例 JSON が同一バイト列のはず");
+
+    // 決定性: 同一 seed で再実行すると同一 stdout
+    let run2 = lists::backends::Backend::run(&lists::backends::JsBackend, &artifacts).expect("run2");
+    assert_eq!(run2.stdout, stdout, "同一 seed の再実行は同一結果（決定性）");
+
+    // 反例が実際に出ていること（never equal は FAIL で shrunk x=0）
+    assert!(stdout.contains("\"FAIL\"") || stdout.contains(": FAIL "), "{stdout}");
+    assert!(stdout.contains("\"shrunk\":{\"x\":0.0}"), "{stdout}");
+}
