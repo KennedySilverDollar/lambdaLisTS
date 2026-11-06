@@ -446,3 +446,32 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 3. letrec の自己末尾呼び出しは JS で self-loop 最適化せず通常再帰（defn の §8.5 最適化との差。深さに注意）。
 4. ref の印字: Rust `<ref>` / JS `{value: ...}` の差（$print は golden 都合で無改変のため）。`=` は参照等価で一致。
 5. 相互再帰 letrec は単一束縛のため不可（design §2.1「対象外」に一致）。
+
+---
+
+## 21. interp-capability §4（C9 host エフェクト now!/elapsed!/trace!）の実装判断（SPEC.md は未変更）
+
+対象: design/interp-capability.md §4。**read-file! は bytes 型が未実装（M29）のため本マイルストーンから除外し M29 に回した**（プロンプトの指示通り）。
+
+### 実装
+- `host.rs::BUILTIN_HOST_EFFECTS = ["now", "elapsed", "trace"]` を host 能力インターフェースの組み込みとして追加（read-file! は M29 後）。`effects.rs::builtin_effect_scheme` に言語側宣言済みのスキームを追加: `now! : (fn () : number)`、`elapsed! : (fn () : number)`（design の `(-> unit num)`。unit は現 SPEC に無いので 0 引数 fn に写像）、`trace! : (fn (string) : nil)`（unit→nil）。
+- エフェクト検査: 宣言なしの呼び出しは unknown-effect（既存どおり）、純粋 defn からの呼び出しは effect-violation + fix `defn!`（既存どおり。組み込みエフェクトも EffectCall なので自動）。defn! の host ハンドラ検査は組み込みエフェクトをスキップ（`is_builtin_effect` で ref 系と統合）。
+- interp（モック）: `now!` は固定列 `MOCK_NOW_BASE=1700000000000 + 呼び出し回数*1000`（Interp 内クロック、同一入力で同一出力=決定的）、`elapsed!` は `now - 初回 now`、`trace!` は `Interp.host_log`（`HostCall{effect,args}` 形式）へ蓄積し nil を返す。repl --host mock では `Interp.host_log` をモック host のログと共有するため、**host-log op に trace! も載る**（host-log は trace! の糖衣として存続。既存 golden 不変）。
+- JS バックエンド: `now!` → `Date.now()`、`elapsed!` → `Date.now() - $BOOT_NOW`（モジュール先頭で1度だけ評価する `$BOOT_NOW` を clock 使用時のみ出力）、`trace!` → `(console.error(s), null)`（console.error は undefined を返すので do の Err 検査で壊れないよう null にする。stderr に出るので example の stdout には影響しない）。
+- docs/backends.md に写像表と「read-file!（M29）で初めて Node `fs` 依存が生じる」旨を明記。現状 now!/elapsed!/trace! は Date.now/console.error のみで Node 固有 API 不要。
+
+### テスト追加
+- `tests/fixtures/hostfx.lts`（trace! のみ差分安全: run-trace/twice-trace）→ `diff::hostfx_trace_diff_interp_vs_backend`（interp vs compile+node で一致。stderr の trace は stdout 比較に影響しない）
+- `acceptance::now_elapsed_bench_is_deterministic_and_trace_is_logged`: ベンチ関数（now!→trace!→now!→elapsed!）が interp で決定的（`(ok 1000)`）＆同一入力の再実行で同一出力＆trace! が effect/args 形式で記録されること
+- `acceptance::builtin_host_effect_diagnostics`: 未宣言 `foo!` → unknown-effect、純粋 defn で `trace!` → effect-violation + fix `defn!`、defn! で now!/trace! はエラーなし
+- fmt fixture に hostfx.lts 追加（冪等）
+
+### 検証
+- `cargo test` 264 全パス（261 + 3）、warning 0。`LISTS_BACKEND=mock` acceptance 24/24。
+- `lists compile hostfx.lts` を2回実行しバイト一致、node で 3/3 example ok（trace は stderr）。`lists fmt` in-place 2回で安定。golden（repl.host-log 含む）無改変。`git diff -- SPEC.md` 空。
+
+### ギャップ・残課題（SPEC には報告のみ）
+1. read-file! / read_file: bytes 型未実装（M29）のため除外。M29 で `(effect read-file! : (fn (string) : (Result bytes (obj (tag "io-error")))))` を追加し、JS は Node fs 依存となる（docs/backends.md に明記済み）。
+2. design の `(-> unit num)` は現 SPEC に unit が無いため `(fn () : number)` に写像。同様に trace! の unit → nil。
+3. now!/elapsed! は JS（Date.now）が非決定的のため差分テスト対象外。interp のみ決定性テスト。
+4. モック now の固定列は呼び出し回数ベース（シード非依存）。「固定列 or シード由来」のうち固定列を採用。

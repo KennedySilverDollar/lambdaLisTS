@@ -74,11 +74,33 @@ pub enum EvalError {
 pub struct Interp {
     pub depth: usize,
     pub calls: BTreeMap<String, usize>,
+    /// design §4: モック host の決定的クロック（now!/elapsed!）。固定列 1700000000000 + 呼び出し回数*1000。
+    pub clock_calls: u64,
+    pub clock_base: Option<f64>,
+    /// trace! の呼び出し記録（repl --host mock ではモック host のログと共有する）
+    pub host_log: Rc<RefCell<Vec<crate::host::HostCall>>>,
 }
+
+/// モック now の固定列の基点（ミリ秒）
+pub const MOCK_NOW_BASE: f64 = 1_700_000_000_000.0;
 
 impl Interp {
     pub fn new() -> Self {
         Interp::default()
+    }
+
+    pub fn set_host_log(&mut self, log: Rc<RefCell<Vec<crate::host::HostCall>>>) {
+        self.host_log = log;
+    }
+
+    /// 決定的な now 値（呼び出しごとに +1000ms）。初回値を base として記録する。
+    fn mock_now(&mut self) -> f64 {
+        let v = MOCK_NOW_BASE + self.clock_calls as f64 * 1000.0;
+        self.clock_calls += 1;
+        if self.clock_base.is_none() {
+            self.clock_base = Some(v);
+        }
+        v
     }
 
     pub fn calls(&self) -> &BTreeMap<String, usize> {
@@ -764,13 +786,27 @@ fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, Eval
                 args,
                 ..
             } => {
-                // design §1.5: ref 系は言語内完結の組み込みエフェクト（host 不要）
-                if crate::effects::is_builtin_ref_effect(effect.as_ref()) {
+                // design §1.5/§4: 組み込みエフェクトは host 不要で直接評価する
+                if crate::effects::is_builtin_effect(effect.as_ref()) {
                     let mut argv = Vec::with_capacity(args.len());
                     for a in &args {
                         argv.push(eval_core(interp, a, &env)?);
                     }
                     return match effect.as_ref() {
+                        // §4: now!/elapsed! はモックでは固定列で決定的、trace! は呼び出し記録へ蓄積
+                        "now" => Ok(Value::Num(interp.mock_now())),
+                        "elapsed" => {
+                            let n = interp.mock_now();
+                            let base = interp.clock_base.unwrap_or(n);
+                            Ok(Value::Num(n - base))
+                        }
+                        "trace" => {
+                            interp.host_log.borrow_mut().push(crate::host::HostCall {
+                                effect: effect.clone(),
+                                args: argv,
+                            });
+                            Ok(Value::Nil)
+                        }
                         "ref" => Ok(Value::Ref(Rc::new(RefCell::new(argv[0].clone())))),
                         "ref-get" => match &argv[0] {
                             Value::Ref(r) => Ok(r.borrow().clone()),

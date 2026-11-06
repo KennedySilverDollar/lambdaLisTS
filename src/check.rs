@@ -495,8 +495,9 @@ impl<'a> Checker<'a> {
         let mut sites = Vec::new();
         find_effect_calls(body, &mut sites);
         for site in &sites {
-            // 組み込みエフェクト（ref 系）は host ハンドラ不要（design §1.5: 言語内完結）
-            if crate::effects::is_builtin_ref_effect(&site.effect) {
+            // 組み込みエフェクト（ref 系・now/elapsed/trace）は host ハンドラ不要
+            // （design §1.5 は言語内完結、§4 は言語側で宣言済みの host 能力）
+            if crate::effects::is_builtin_effect(&site.effect) {
                 continue;
             }
             let Some(sig) = self.effects.get(&site.effect).cloned() else {

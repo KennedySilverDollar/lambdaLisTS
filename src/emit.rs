@@ -46,6 +46,28 @@ fn core_uses_builtin_ref(e: &Core) -> bool {
     sites.iter().any(|s| crate::effects::is_builtin_ref_effect(&s.effect))
 }
 
+fn core_uses_clock(e: &Core) -> bool {
+    let mut sites = Vec::new();
+    find_effect_calls(e, &mut sites);
+    sites
+        .iter()
+        .any(|s| matches!(s.effect.as_ref(), "now" | "elapsed"))
+}
+
+fn defs_use_clock(defs: &[CoreDef]) -> bool {
+    defs.iter().any(|d| match d {
+        CoreDef::Defn { body, .. } => core_uses_clock(body),
+        CoreDef::Example {
+            actual, expected, ..
+        } => core_uses_clock(actual) || core_uses_clock(expected),
+        CoreDef::Prop { body, .. } => core_uses_clock(body),
+        _ => false,
+    })
+}
+
+/// §4: elapsed! の基準時刻（モジュール先頭で1度だけ評価）
+const NOW_JS: &str = "const $BOOT_NOW = Date.now();\n";
+
 fn defs_use_builtin_ref(defs: &[CoreDef]) -> bool {
     defs.iter().any(|d| match d {
         CoreDef::Defn { body, .. } => core_uses_builtin_ref(body),
@@ -610,6 +632,7 @@ struct Gen<'a> {
     uses_async: bool,
     decimal_used: bool,
     builtin_ref_used: bool,
+    clock_used: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -643,6 +666,7 @@ impl<'a> Gen<'a> {
         }
         let uses_async = defs_use_async(&input.defs, &impure_defs);
         let builtin_ref_used = defs_use_builtin_ref(&input.defs);
+        let clock_used = defs_use_clock(&input.defs);
         Gen {
             user_names,
             export_names,
@@ -659,6 +683,7 @@ impl<'a> Gen<'a> {
             in_async: false,
             uses_async,
             builtin_ref_used,
+            clock_used,
             decimal_used: defs_use_decimal(&input.defs),
         }
     }
@@ -721,6 +746,9 @@ impl<'a> Gen<'a> {
         }
         if self.builtin_ref_used {
             out += REF_JS;
+        }
+        if self.clock_used {
+            out += NOW_JS;
         }
         for name in &self.stdlib_used {
             out += &format!("const {} = {};\n", stdlib_js_name(name), self.stdlib_impl(name));
@@ -1414,8 +1442,8 @@ impl<'a> Gen<'a> {
                 }
             }
             Core::EffectCall { effect, args, .. } => {
-                // design §1.5: 組み込み ref エフェクトは host なしで直接書像（§7: { value } オブジェクト）
-                if crate::effects::is_builtin_ref_effect(effect) {
+                // design §1.5/§4: 組み込みエフェクトは host なしで直接書像
+                if crate::effects::is_builtin_effect(effect) {
                     match effect.as_ref() {
                         "ref" => {
                             w.write("$ref_new(");
@@ -1433,6 +1461,15 @@ impl<'a> Gen<'a> {
                             w.write(").value = ");
                             self.expr(&args[1], ind, w);
                             w.write(", null)");
+                        }
+                        // §4: now! → Date.now()、elapsed! → Date.now() - $BOOT_NOW、trace! → console.error
+                        "now" => w.write("Date.now()"),
+                        "elapsed" => w.write("(Date.now() - $BOOT_NOW)"),
+                        "trace" => {
+                            // console.error は undefined を返すので nil（null）にする（do の Err 検査対策）
+                            w.write("(console.error(");
+                            self.expr(&args[0], ind, w);
+                            w.write("), null)");
                         }
                         _ => unreachable!(),
                     }

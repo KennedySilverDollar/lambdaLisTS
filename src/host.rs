@@ -95,6 +95,14 @@ pub fn default_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
     }
 }
 
+/// design/interp-capability.md §4: M20 host 能力インターフェースに追加される組み込みエフェクト。
+/// 言語側で宣言済みとして扱い（effect 宣言不要）、host ハンドラ検査もスキップする。
+/// - now! / elapsed! : モックでは固定列（MOCK_NOW_BASE + 呼び出し回数*1000）で決定的（eval 側クロック）
+/// - trace! : 呼び出し記録（host-log）に蓄積。host-log op は trace! の糖衣として残る
+/// - read-file! : bytes 型が未実装（M29）のため現時点では未対応。M29 で bytes 実装時に追加し、
+///   JS 側は Node `fs` 依存となる（docs/backends.md に明記）
+pub const BUILTIN_HOST_EFFECTS: &[&str] = &["now", "elapsed", "trace"];
+
 /// モック host: 呼び出しを記録しつつ、決定的な固定応答を返す。
 /// 同じ effect 宣言・同じ呼び出し列なら、応答も記録も常に同じ（決定性 MUST）。
 pub struct MockHost {
@@ -140,6 +148,11 @@ impl MockHost {
 
     pub fn calls(&self) -> Vec<HostCall> {
         self.calls.borrow().clone()
+    }
+
+    /// 呼び出し記録の共有ハンドル（repl の Interp と log を共有し、trace! も host-log に載せる）
+    pub fn log_handle(&self) -> Rc<RefCell<Vec<HostCall>>> {
+        self.calls.clone()
     }
 }
 

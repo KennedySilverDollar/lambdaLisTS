@@ -32,8 +32,32 @@ pub fn builtin_effect_scheme(name: &str) -> Option<Scheme> {
                 Box::new(Type::Nil),
             ),
         }),
+        // design §4: M20 host 能力の組み込みエフェクト（言語側で宣言済みとして扱う）。
+        // now! : (fn () : num) — design の (-> unit num)。elapsed! も同じ。
+        "now" => Some(Scheme {
+            vars: vec![],
+            body: Type::FnT(vec![], Box::new(Type::Number)),
+        }),
+        "elapsed" => Some(Scheme {
+            vars: vec![],
+            body: Type::FnT(vec![], Box::new(Type::Number)),
+        }),
+        // trace! : (fn (str) : unit) → nil。host-log の糖衣（design §4）。
+        "trace" => Some(Scheme {
+            vars: vec![],
+            body: Type::FnT(vec![Type::Str], Box::new(Type::Nil)),
+        }),
+        // read-file! は bytes 型が未実装（M29）のため現時点では対象外（M29 に回す）
         _ => None,
     }
+}
+
+/// 組み込みエフェクト（ref 系 + host 能力 now/elapsed/trace）。effect 宣言不要・host ハンドラ不要。
+pub fn is_builtin_effect(name: &str) -> bool {
+    matches!(
+        name,
+        "ref" | "ref-get" | "ref-set" | "now" | "elapsed" | "trace"
+    )
 }
 
 pub fn is_builtin_ref_effect(name: &str) -> bool {

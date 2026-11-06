@@ -102,3 +102,11 @@ fn letrec_ref_builder_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["letrec-ref-builder.lts"], "letrec-ref-builder.lts");
 }
+
+// design/interp-capability.md §4（C9）: trace! の interp/JS 差分一致（JS では console.error=stderr）。
+// now!/elapsed! は JS が Date.now 由来で非決定的のため、ここではなく interp 側のみテストする。
+#[test]
+fn hostfx_trace_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["hostfx.lts"], "hostfx.lts");
+}

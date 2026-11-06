@@ -41,6 +41,20 @@ lists compile foo.lts --out out --backend wasm           # CLI からも選択�
 - 失敗時は exit code != 0 または `example N: FAIL ...` を出し、stderr に理由を書くこと。
 - 比較はインタープリタの `Value` と `structural_equal` で行われる（tests/acceptance/common.rs の `assert_diff`）。
 
+## host エフェクトのバックエンド写像（M20 + design/interp-capability.md §4）
+
+組み込み host エフェクト（`host.rs::BUILTIN_HOST_EFFECTS` = now / elapsed / trace）の写像:
+
+| エフェクト | interp（モック host） | JS バックエンド |
+|---|---|---|
+| `now!` | 固定列で決定的（`MOCK_NOW_BASE`=1700000000000 + 呼び出し回数*1000） | `Date.now()`（非決定的） |
+| `elapsed!` | `now - 初回 now`（決定的） | `Date.now() - $BOOT_NOW`（モジュール先頭で1度だけ評価。非決定的） |
+| `trace!` | 呼び出し記録（`host-log` op）へ蓄積 | `console.error(s)`（stderr。example の stdout には影響しない） |
+
+- これらは effect 宣言不要・defn! の host ハンドラ不要（組み込みとして check をスキップ）。純粋 defn から呼ぶと effect-violation、未宣言エフェクトは unknown-effect（§7.4）。
+- `now!`/`elapsed!` は JS 側が非決定的なので、差分テスト（T7 系）の対象外。`trace!` は stdout に影響しないため差分テスト可能。
+- `read-file!` は bytes 型が未実装（M29）のため現時点では未対応。M29 で bytes を実装する際に追加され、**その時点で初めて JS バックエンドが Node 固有 API（`fs`）に依存する**。現状の now!/elapsed!/trace! は `Date.now()`/`console.error` のみで、Node 固有 API への依存はない。
+
 ## 現状のバックエンド
 
 | 名前 | compile | run |

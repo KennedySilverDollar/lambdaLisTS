@@ -196,6 +196,86 @@ fn ref_builtin_effect_violation_in_pure_defn_and_ok_in_defn_bang() {
     );
 }
 
+// design/interp-capability.md §4（C9）: now!/elapsed! はモックで固定列（決定的）。
+// bench: t0=now! → BASE、t1=now! → BASE+1000 なので (- t1 t0) = 1000。trace! は呼び出し記録へ。
+#[test]
+fn now_elapsed_bench_is_deterministic_and_trace_is_logged() {
+    let src = "(defn! bench (host : (obj)) : (Result number nil)\n\
+               (do [t0 (now!)]\n\
+                 (do [_ (trace! \"bench\")]\n\
+                   (do [t1 (now!)]\n\
+                     (do [e (elapsed!)]\n\
+                       (ok (- t1 t0)))))))\n\
+               (example (bench (obj)) => (ok 1000))\n";
+    let run_once = || {
+        let mut cache = ModuleCache::default();
+        let res = lists::check::check_source(src, "test.lts", &mut cache);
+        assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+        let lex = lists::lexer::tokenize(src, "test.lts");
+        let (program, _) = lists::parser::parse_program(&lex);
+        let (defs, _) = lists::desugar::desugar(&program);
+        let env = lists::eval::global_env();
+        lists::eval::load_defs(&defs, &env);
+        let mut interp = lists::eval::Interp::new();
+        let results = lists::eval::run_examples(&mut interp, &defs, &env).expect("run");
+        (results, interp)
+    };
+    let (r1, interp1) = run_once();
+    assert!(r1.iter().all(|r| r.pass), "{:?}", r1.iter().map(|r| lists::value::print_value(&r.actual)).collect::<Vec<_>>());
+    // trace! の呼び出し記録（effect/args 形式）
+    let log = interp1.host_log.borrow().clone();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].effect.as_ref(), "trace");
+    assert_eq!(lists::value::print_value(&log[0].args[0]), "bench");
+    // 決定性: 同一入力を再実行すると同一出力
+    let (r2, _) = run_once();
+    assert_eq!(
+        r1.iter().map(|r| lists::value::print_value(&r.actual)).collect::<Vec<_>>(),
+        r2.iter().map(|r| lists::value::print_value(&r.actual)).collect::<Vec<_>>()
+    );
+    
+}
+
+// §4/§7.4: 宣言なしの呼び出しは unknown-effect、純粋 defn からの呼び出しは effect-violation（fix: defn!）。
+#[test]
+fn builtin_host_effect_diagnostics() {
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn! f (host : (obj)) : nil (foo! 1))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res
+        .diagnostics
+        .iter()
+        .any(|d| d.kind == DiagKind::UnknownEffect));
+
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn g () : nil (trace! \"x\"))",
+        "test.lts",
+        &mut cache,
+    );
+    let d = res
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == DiagKind::EffectViolation)
+        .expect("effect-violation");
+    assert!(matches!(
+        &d.fix,
+        Some(lists::diagnostic::Patch::Replace { template, .. }) if template == "defn!"
+    ));
+
+    // 組み込みエフェクト（now!/trace!）は宣言なしで defn! から使える
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn! ok-fn (host : (obj)) : (Result number nil) (do [_ (trace! \"x\")] (do [t (now!)] (ok t))))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+}
+
 #[test]
 fn t2_stock_non_exhaustive_with_fix_golden() {
     let res = check_fixture("stock.lts");
