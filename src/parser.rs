@@ -22,7 +22,7 @@ const RESERVED: &[&str] = &[
     "type", "effect", "prop", "forall", "example", "import", "export", "Array", "union",
     "Result", "Option", "letrec",
 ];
-const PRIMS: &[&str] = &["number", "string", "bool", "decimal", "char", "builder"];
+const PRIMS: &[&str] = &["number", "string", "bool", "decimal", "char", "builder", "bytes"];
 const OPERATORS: &[&str] = &["+", "-", "*", "/", "<", ">", "<=", ">=", "="];
 
 fn is_reserved(text: &str) -> bool {
@@ -826,6 +826,7 @@ impl<'a> Parser<'a> {
                             "bool" => Prim::Bool,
                             "char" => Prim::Char,
                             "builder" => Prim::Builder,
+                            "bytes" => Prim::Bytes,
                             _ => Prim::Nil,
                         };
                         TypeExpr::Prim {

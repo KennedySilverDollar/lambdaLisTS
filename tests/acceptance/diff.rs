@@ -110,3 +110,12 @@ fn hostfx_trace_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["hostfx.lts"], "hostfx.lts");
 }
+
+// design/interp-capability.md §1.4（C8 bytes）: UTF-8 往復・invalid-utf8/invalid-code・
+// codepoints（サロゲート境界）・#u8 印字・等価の interp/JS 差分一致。
+// read-file! は Node fs 依存のため差分テストからは除外。
+#[test]
+fn bytes_edge_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["bytes-edge.lts"], "bytes-edge.lts");
+}

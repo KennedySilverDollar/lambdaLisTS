@@ -156,6 +156,7 @@ pub fn unify(a0: &Type, b0: &Type, subst: &mut Subst, aliases: &AliasEnv) -> Opt
             Some(a.clone())
         }
         (Type::Builder, Type::Builder) => Some(a.clone()),
+        (Type::Bytes, Type::Bytes) => Some(a.clone()),
         (Type::Obj(fa), Type::Obj(fb)) => {
             for (k, bv) in fb {
                 let av = fa.get(k)?;

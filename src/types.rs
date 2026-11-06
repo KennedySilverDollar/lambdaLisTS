@@ -19,6 +19,7 @@ pub enum Type {
     Set(Box<Type>),                 // (set K)
     Ref(Box<Type>),                 // (ref T) — §1.5（エフェクト型のセル）
     Builder,                        // builder プリミティブ — §3.2
+    Bytes,                          // bytes プリミティブ（不変バイト列）— §1.4
     ResultT(Box<Type>, Box<Type>),
     FnT(Vec<Type>, Box<Type>),
     Var(usize),
@@ -54,6 +55,7 @@ pub fn structural_equal(a: &Type, b: &Type) -> bool {
         (Type::Set(x), Type::Set(y)) => structural_equal(x, y),
         (Type::Ref(x), Type::Ref(y)) => structural_equal(x, y),
         (Type::Builder, Type::Builder) => true,
+        (Type::Bytes, Type::Bytes) => true,
         (Type::Union(xs), Type::Union(ys)) => {
             if xs.len() != ys.len() {
                 return false;
@@ -220,6 +222,7 @@ fn print_type_seen(t: &Type, aliases: &AliasEnv, seen: &mut BTreeSet<Rc<str>>) -
         Type::Set(k) => format!("(set {})", print_type_seen(k, aliases, seen)),
         Type::Ref(inner) => format!("(ref {})", print_type_seen(inner, aliases, seen)),
         Type::Builder => "builder".to_string(),
+        Type::Bytes => "bytes".to_string(),
         Type::Union(members) => {
             let members = normalize_union(members.clone(), aliases);
             let non_nil: Vec<&Type> = members.iter().filter(|m| !matches!(m, Type::Nil)).collect();

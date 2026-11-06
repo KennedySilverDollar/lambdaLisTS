@@ -47,16 +47,29 @@ pub fn builtin_effect_scheme(name: &str) -> Option<Scheme> {
             vars: vec![],
             body: Type::FnT(vec![Type::Str], Box::new(Type::Nil)),
         }),
-        // read-file! は bytes 型が未実装（M29）のため現時点では対象外（M29 に回す）
+        // §4.1: read-file! : (fn (string) : (Result bytes (obj (tag "io-error"))))（M29 で bytes 実装時に有効化）
+        "read-file" => Some(Scheme {
+            vars: vec![],
+            body: Type::FnT(
+                vec![Type::Str],
+                Box::new(Type::ResultT(
+                    Box::new(Type::Bytes),
+                    Box::new(Type::Obj(BTreeMap::from([(
+                        Rc::from("tag"),
+                        Type::Literal(Rc::from("io-error")),
+                    )]))),
+                )),
+            ),
+        }),
         _ => None,
     }
 }
 
-/// 組み込みエフェクト（ref 系 + host 能力 now/elapsed/trace）。effect 宣言不要・host ハンドラ不要。
+/// 組み込みエフェクト（ref 系 + host 能力 now/elapsed/trace/read-file）。effect 宣言不要・host ハンドラ不要。
 pub fn is_builtin_effect(name: &str) -> bool {
     matches!(
         name,
-        "ref" | "ref-get" | "ref-set" | "now" | "elapsed" | "trace"
+        "ref" | "ref-get" | "ref-set" | "now" | "elapsed" | "trace" | "read-file"
     )
 }
 

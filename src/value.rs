@@ -21,6 +21,7 @@ pub enum Value {
     Set(Rc<PersistentMap>),         // 永続 set（値は Nil。キー集合のみ意味を持つ）
     Ref(Rc<RefCell<Value>>),        // 可変セル（§1.5）。共有されるので clone でセルを共有する
     Builder(Rc<Vec<String>>),       // 不変 builder（§3.2）。push は共有時のみ複製（償却 O(1)）
+    Bytes(Rc<Vec<u8>>),             // 不変バイト列（§1.4）。JS 側は Uint8Array
     Ok(Box<Value>),
     Err(Box<Value>),
     Closure(Rc<Closure>),
@@ -104,6 +105,13 @@ pub enum BuiltinKind {
     BuilderPush,
     BuilderToStr,
     BuilderJoin,
+    BytesGet,
+    BytesLen,
+    BytesSlice,
+    StrToBytes,
+    BytesToStr,
+    StrToCodepoints,
+    CodepointsToStr,
     /// モック host のハンドラ（host.rs）。呼び出しを log に記録し、default を返す。
     /// log は実行時の記録なのでシリアライズしない。
     HostMock {
@@ -271,6 +279,7 @@ fn eq_visit(a: &Value, b: &Value, path: &mut Vec<(usize, usize)>) -> Result<bool
         // ref は参照等価（§8.3 の関数と同じ扱い。JS 側は $REF タグ付きオブジェクトの a === b）
         (Value::Ref(x), Value::Ref(y)) => Ok(Rc::ptr_eq(x, y)),
         (Value::Builder(x), Value::Builder(y)) => Ok(x == y),
+        (Value::Bytes(x), Value::Bytes(y)) => Ok(x == y),
         (Value::Ok(x), Value::Ok(y)) => eq_boxed(x, y, a, b, path),
         (Value::Err(x), Value::Err(y)) => eq_boxed(x, y, a, b, path),
         (Value::Dec(x), Value::Dec(y)) => Ok(x == y),
@@ -366,6 +375,8 @@ pub fn print_value(v: &Value) -> String {
         Value::Ref(_) => "<ref>".to_string(),
         // builder は JS 側が配列なので、配列と同じ印字形式で一致させる
         Value::Builder(parts) => format!("[{}]", parts.join(" ")),
+        // bytes の印字は §1.4 新規決定（§11.6 に未定義）: #u8[1 2 3] 形式。JS 側の $print も同じ（Uint8Array 分岐）
+        Value::Bytes(b) => format!("#u8[{}]", b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ")),
     }
 }
 

@@ -475,3 +475,36 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 2. design の `(-> unit num)` は現 SPEC に unit が無いため `(fn () : number)` に写像。同様に trace! の unit → nil。
 3. now!/elapsed! は JS（Date.now）が非決定的のため差分テスト対象外。interp のみ決定性テスト。
 4. モック now の固定列は呼び出し回数ベース（シード非依存）。「固定列 or シード由来」のうち固定列を採用。
+
+---
+
+## 22. interp-capability §1.4（C8 bytes）+ §4.1（read-file!）の実装判断（SPEC.md は未変更）
+
+### bytes（§1.4 C8）
+- `Type::Bytes` / `Value::Bytes(Rc<Vec<u8>>)`。surface 型プリム `bytes`。不変バイト列（変更操作は stdlib に存在しない）。
+- stdlib: `bytes-get : (fn (bytes number) : (Option number))`（nth と同じく小数添字は切り捨て・範囲外は nil。design は戻り値型を明記しないため配列アクセスの nth に合わせた）、`bytes-len : (fn (bytes) : number)`、`bytes-slice : (fn (bytes number number) : bytes)`（slice と同じ slice_bounds クランプ）、`str->bytes : (fn (string) : bytes)`（UTF-8、常に成功）、`bytes->str : (fn (bytes) : (Result string (obj (tag "invalid-utf8"))))`、`str->codepoints : (fn (string) : (Array number))`、`codepoints->str : (fn ((Array number)) : (Result string (obj (tag "invalid-code"))))`（各要素は整数・0..0x10FFFF・サロゲート以外）。design の `int` は number に写像（i64 は P5）。
+- `=` はバイト列の構造等価。循環は構築不可。
+- **印字規約（新規決定。§11.6 に bytes は未定義）**: `#u8[1 2 3]` 形式（空は `#u8[]`）。Rust `print_value` と JS `$print`（Uint8Array 分岐を PRINT_JS に追加）で同一バイト列。PRINT_JS 変更に伴い golden の decimal-edge.js / effect-run.js は $print 1行追加のみ（UPDATE_SNAPSHOTS で再生成し diff を確認）。
+- **JS 写像**: `Uint8Array`。`str->bytes` → `TextEncoder().encode`、`bytes->str` → `TextDecoder("utf-8", {fatal:true})`（不正なら throw → err invalid-utf8。Rust の from_utf8 と一致）、`bytes-slice` → `slice`（slice_bounds 共有）、codepoints は codePointAt/fromCodePoint。
+- JSON: bytes は数値配列として直列化（$mjson に Uint8Array 分岐追加、value_to_json も同一）。example の actual に生の bytes は出さない方針（char と同じく JSON 上は配列と区別されないため）。
+
+### read-file!（§4.1。M28 で bytes 未実装のため M29=本マイルストーンに回した）
+- `(effect read-file! : (fn (string) : (Result bytes (obj (tag "io-error")))))` を組み込みエフェクトとして登録（`is_builtin_effect` に "read-file" 追加。effect 宣言不要、host ハンドラ検査スキップ、純粋 defn からは effect-violation + fix）。
+- interp/モック: `Interp.virtual_files`（登録された仮想ファイル）から読み `(ok bytes)`、無ければ `(err (obj (tag "io-error")))`。
+- JS: `import * as $fs from "node:fs/promises"` + `$read_file`（read-file! 使用時のみ出力）。**これが初めての Node 固有 API 依存**（docs/backends.md に明記済み）。差分テストからは除外（FS は非決定的）。
+
+### テスト追加
+- `tests/fixtures/bytes-edge.lts`（30 example: 基本操作・UTF-8 往復（絵文字=4バイト）・invalid-utf8（絵文字途中バイト等）・codepoints とサロゲート境界 invalid-code・#u8 印字・等価）→ `diff::bytes_edge_diff_interp_vs_backend`（interp vs compile+node 全一致、mock でも一致）
+- `acceptance::read_file_effect_reads_virtual_files_and_io_error_on_missing`（仮想ファイルからの読み取り・missing で io-error・純粋 defn での effect-violation・JS 出力が node:fs/promises を含むこと）
+- fmt fixture に bytes-edge.lts 追加（冪等）
+
+### 検証
+- `cargo test` 266 全パス（264 + 2）、warning 0。`LISTS_BACKEND=mock` acceptance 26/26。
+- `lists compile bytes-edge.lts` を2回実行しバイト一致、node で 30/30 example ok。`lists fmt` in-place 2回で安定。golden は $print 1行追加のみ（意図的変更、diff 確認済み）。`git diff -- SPEC.md` 空。
+
+### ギャップ・残課題（SPEC には報告のみ）
+1. bytes の印字規約 `#u8[...]` は §11.6 に未定義のため新規決定（プロンプトの例示形式を採用）。SPEC 改訂時に追記候補。
+2. bytes-get の戻り値型は design が明記しないため nth と同じ `(Option number)` に決定（範囲外は nil）。char-at の `Result out-of-range` とは流儀が異なる（配列=Option、位置ベース=Result）点を記録。
+3. bytes にはソース上のリテラル構文が無い（prop の counterexample 印字は print_value 形式）。
+4. read-file! の JS 実行は差分テスト対象外（Node fs）。interp のみ仮想ファイルで決定的にテスト。
+5. $json（decimal時）の Uint8Array 分岐は $mjson のみに追加。decimal と bytes を同時に example 出力する組合せは未対応（実害なし、記録のみ）。

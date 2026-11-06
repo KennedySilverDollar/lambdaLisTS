@@ -254,5 +254,29 @@ pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
             vec![],
             fn_t(vec![arr(str_t.clone()), str_t.clone()], str_t.clone()),
         ),
+        // design/interp-capability.md §1.4: bytes（不変バイト列。int→number）
+        entry("bytes-get", vec![], fn_t(vec![Type::Bytes, num.clone()], opt(num.clone(), &nil_t))),
+        entry("bytes-len", vec![], fn_t(vec![Type::Bytes], num.clone())),
+        entry(
+            "bytes-slice",
+            vec![],
+            fn_t(vec![Type::Bytes, num.clone(), num.clone()], Type::Bytes),
+        ),
+        entry("str->bytes", vec![], fn_t(vec![str_t.clone()], Type::Bytes)),
+        entry(
+            "bytes->str",
+            vec![],
+            fn_t(vec![Type::Bytes], res(str_t.clone(), tag_obj("invalid-utf8"))),
+        ),
+        entry(
+            "str->codepoints",
+            vec![],
+            fn_t(vec![str_t.clone()], arr(num.clone())),
+        ),
+        entry(
+            "codepoints->str",
+            vec![],
+            fn_t(vec![arr(num.clone())], res(str_t.clone(), tag_obj("invalid-code"))),
+        ),
     ])
 }

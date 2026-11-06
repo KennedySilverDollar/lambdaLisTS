@@ -270,6 +270,7 @@ impl Desugarer {
                 Prim::Bool => Type::Bool,
                 Prim::Char => Type::Char,
                 Prim::Builder => Type::Builder,
+                Prim::Bytes => Type::Bytes,
                 Prim::Nil => Type::Nil,
             },
             TypeExpr::Alias { name, .. } => Type::Alias(name.clone()),

@@ -212,6 +212,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::Ok(x) => json!({ "tag": "Ok", "value": value_to_json(x) }),
         Value::Err(x) => json!({ "tag": "Err", "value": value_to_json(x) }),
         Value::Ref(_) => serde_json::Value::String("<ref>".to_string()),
+        // bytes は JS 側が Uint8Array なので $mjson と同じく数値配列として直列化
+        Value::Bytes(b) => serde_json::Value::Array(b.iter().map(|x| serde_json::json!(x)).collect()),
         Value::Builder(parts) => serde_json::Value::Array(parts.iter().map(|p| serde_json::Value::String(p.clone())).collect()),
         Value::Map(m) => json!({
             "tag": "Map",

@@ -338,6 +338,7 @@ fn print_type(t: &TypeExpr) -> String {
             Prim::Bool => "bool",
             Prim::Char => "char",
             Prim::Builder => "builder",
+            Prim::Bytes => "bytes",
             Prim::Nil => "nil",
         }
         .to_string(),
@@ -439,7 +440,7 @@ mod tests {
 
     #[test]
     fn fmt_is_idempotent_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts", "char-edge.lts", "letrec-ref-builder.lts", "hostfx.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts", "char-edge.lts", "letrec-ref-builder.lts", "hostfx.lts", "bytes-edge.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name);
             assert!(once.diagnostics.is_empty(), "{name}: {:?}", once.diagnostics);
@@ -451,7 +452,7 @@ mod tests {
 
     #[test]
     fn fmt_preserves_ast_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts", "char-edge.lts", "letrec-ref-builder.lts", "hostfx.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts", "char-edge.lts", "letrec-ref-builder.lts", "hostfx.lts", "bytes-edge.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name).output;
             assert_eq!(ast_json(&src, name), ast_json(&once, name), "{name}");

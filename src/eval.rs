@@ -79,6 +79,8 @@ pub struct Interp {
     pub clock_base: Option<f64>,
     /// trace! の呼び出し記録（repl --host mock ではモック host のログと共有する）
     pub host_log: Rc<RefCell<Vec<crate::host::HostCall>>>,
+    /// design §4.1: read-file! が読むモックの仮想ファイル（パス → バイト列）
+    pub virtual_files: BTreeMap<String, Vec<u8>>,
 }
 
 /// モック now の固定列の基点（ミリ秒）
@@ -568,6 +570,64 @@ impl Interp {
                 }
                 Ok(Value::Str(Rc::from(out.as_str())))
             }
+            BuiltinKind::BytesGet => {
+                let b = match &args[0] {
+                    Value::Bytes(b) => b.clone(),
+                    _ => return Err(EvalError::Runtime("bytes が必要です".to_string())),
+                };
+                let i = num(&args[1])?;
+                // nth と同じく小数添字は切り捨て、範囲外は nil（Option）
+                let k = if i.is_nan() { usize::MAX } else { i.trunc() as usize };
+                if !i.is_nan() && i >= 0.0 && k < b.len() {
+                    Ok(Value::Num(b[k] as f64))
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
+            BuiltinKind::BytesLen => match &args[0] {
+                Value::Bytes(b) => Ok(Value::Num(b.len() as f64)),
+                _ => Err(EvalError::Runtime("bytes が必要です".to_string())),
+            },
+            BuiltinKind::BytesSlice => {
+                let b = match &args[0] {
+                    Value::Bytes(b) => b.clone(),
+                    _ => return Err(EvalError::Runtime("bytes が必要です".to_string())),
+                };
+                let (a, z) = slice_bounds(b.len(), num(&args[1])?, num(&args[2])?);
+                Ok(Value::Bytes(Rc::new(b[a..z].to_vec())))
+            }
+            BuiltinKind::StrToBytes => {
+                let s = str_v(&args[0])?;
+                Ok(Value::Bytes(Rc::new(s.as_bytes().to_vec())))
+            }
+            BuiltinKind::BytesToStr => match &args[0] {
+                Value::Bytes(b) => match std::str::from_utf8(b) {
+                    Ok(s) => Ok(ok_v(Value::Str(Rc::from(s)))),
+                    Err(_) => Ok(err_v(err_tag_value("invalid-utf8"))),
+                },
+                _ => Err(EvalError::Runtime("bytes が必要です".to_string())),
+            },
+            BuiltinKind::StrToCodepoints => {
+                let s = str_v(&args[0])?;
+                Ok(Value::Array(s.chars().map(|c| Value::Num(c as u32 as f64)).collect()))
+            }
+            BuiltinKind::CodepointsToStr => {
+                let arr = arr_v(&args[0])?;
+                let mut s = String::new();
+                for x in &arr {
+                    let n = num(x)?;
+                    let valid = n.is_finite()
+                        && n == n.trunc()
+                        && n >= 0.0
+                        && n <= 0x10FFFF as f64
+                        && !(0xD800..=0xDFFF).contains(&(n as u32));
+                    match valid.then(|| char::from_u32(n as u32)).flatten() {
+                        Some(c) => s.push(c),
+                        None => return Ok(err_v(err_tag_value("invalid-code"))),
+                    }
+                }
+                Ok(ok_v(Value::Str(Rc::from(s.as_str()))))
+            }
             BuiltinKind::HostMock {
                 effect,
                 default,
@@ -807,6 +867,17 @@ fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, Eval
                             });
                             Ok(Value::Nil)
                         }
+                        // §4.1: read-file! はモックの仮想ファイルから読む。無ければ io-error。
+                        "read-file" => {
+                            let path = match &argv[0] {
+                                Value::Str(s) => s.to_string(),
+                                _ => return Err(EvalError::Runtime("read-file! は string が必要です".to_string())),
+                            };
+                            match interp.virtual_files.get(&path) {
+                                Some(data) => Ok(Value::Ok(Box::new(Value::Bytes(Rc::new(data.clone()))))),
+                                None => Ok(Value::Err(Box::new(err_tag_value("io-error")))),
+                            }
+                        }
                         "ref" => Ok(Value::Ref(Rc::new(RefCell::new(argv[0].clone())))),
                         "ref-get" => match &argv[0] {
                             Value::Ref(r) => Ok(r.borrow().clone()),
@@ -978,6 +1049,13 @@ pub fn stdlib_env() -> Rc<Env> {
     def("builder-push", BuiltinKind::BuilderPush);
     def("builder->str", BuiltinKind::BuilderToStr);
     def("builder-join", BuiltinKind::BuilderJoin);
+    def("bytes-get", BuiltinKind::BytesGet);
+    def("bytes-len", BuiltinKind::BytesLen);
+    def("bytes-slice", BuiltinKind::BytesSlice);
+    def("str->bytes", BuiltinKind::StrToBytes);
+    def("bytes->str", BuiltinKind::BytesToStr);
+    def("str->codepoints", BuiltinKind::StrToCodepoints);
+    def("codepoints->str", BuiltinKind::CodepointsToStr);
     env
 }
 

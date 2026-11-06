@@ -26,14 +26,14 @@ const RUNTIME_EXPORTS: &[&str] = &["ok", "err", "structuralEqual"];
 const SLICE_BOUNDS_JS: &str = "function $slice_bounds(len, start, end) {\n  const s = Number.isNaN(start) ? 0 : start < 0 ? Math.max(len + start, 0) : Math.min(start, len);\n  const e = Number.isNaN(end) ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);\n  return [Math.trunc(s), Math.trunc(Math.max(e, s))];\n}\n";
 
 // SPEC §11.6/付録C #10: str の印字規約（print_value 互換）。f64 は指数表記を展開する。
-const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (Array.isArray(v)) return \"[\" + v.map($print).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $print_num(n) {\n  if (Number.isNaN(n)) return \"NaN\";\n  if (n === Infinity) return \"Infinity\";\n  if (n === -Infinity) return \"-Infinity\";\n  if (Object.is(n, -0)) return \"-0\";\n  const s = String(n);\n  if (s.indexOf(\"e\") < 0 && s.indexOf(\"E\") < 0) return s;\n  const m = /^(-?)(\\d+)(?:\\.(\\d+))?[eE]([+-]?\\d+)$/.exec(s);\n  if (!m) return s;\n  const sign = m[1];\n  const digits = m[2] + (m[3] || \"\");\n  const point = m[2].length + parseInt(m[4], 10);\n  if (point <= 0) return sign + \"0.\" + \"0\".repeat(-point) + digits;\n  if (point >= digits.length) return sign + digits + \"0\".repeat(point - digits.length);\n  return sign + digits.slice(0, point) + \".\" + digits.slice(point);\n}\nfunction $cmp_str(a, b) {\n  const pa = [...a];\n  const pb = [...b];\n  const n = Math.min(pa.length, pb.length);\n  for (let i = 0; i < n; i++) {\n    const d = pa[i].codePointAt(0) - pb[i].codePointAt(0);\n    if (d !== 0) return d;\n  }\n  return pa.length - pb.length;\n}\n";
+const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (Array.isArray(v)) return \"[\" + v.map($print).join(\" \") + \"]\";\n  if (v instanceof Uint8Array) return \"#u8[\" + [...v].join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $print_num(n) {\n  if (Number.isNaN(n)) return \"NaN\";\n  if (n === Infinity) return \"Infinity\";\n  if (n === -Infinity) return \"-Infinity\";\n  if (Object.is(n, -0)) return \"-0\";\n  const s = String(n);\n  if (s.indexOf(\"e\") < 0 && s.indexOf(\"E\") < 0) return s;\n  const m = /^(-?)(\\d+)(?:\\.(\\d+))?[eE]([+-]?\\d+)$/.exec(s);\n  if (!m) return s;\n  const sign = m[1];\n  const digits = m[2] + (m[3] || \"\");\n  const point = m[2].length + parseInt(m[4], 10);\n  if (point <= 0) return sign + \"0.\" + \"0\".repeat(-point) + digits;\n  if (point >= digits.length) return sign + digits + \"0\".repeat(point - digits.length);\n  return sign + digits.slice(0, point) + \".\" + digits.slice(point);\n}\nfunction $cmp_str(a, b) {\n  const pa = [...a];\n  const pb = [...b];\n  const n = Math.min(pa.length, pb.length);\n  for (let i = 0; i < n; i++) {\n    const d = pa[i].codePointAt(0) - pb[i].codePointAt(0);\n    if (d !== 0) return d;\n  }\n  return pa.length - pb.length;\n}\n";
 
 // decimal（M23）用のローカルヘルパ。BigInt のスケール済み整数で interp(i128) とビット一致する。
 // エラーメッセージは interp 側（src/decimal.rs の ERR_*）と同一文字列。
 // design/interp-capability.md §1.1/§7: map は内部 Map、set は内部 Set（map との等価性の区別のため。
 // design §7 の「set も Map」からの逸脱は REPORT.md に記録）。挿入順反復に一致させる。
 // map/set 系 stdlib を使うときだけ出力し、既存の出力バイトには影響しない。
-const MAP_JS: &str = "function $mjson(v) {\n  if (typeof v === \"bigint\") { const neg = v < 0n; const a = neg ? -v : v; const i = a / 1000000000000000000n; const f = a % 1000000000000000000n; return JSON.stringify({ tag: \"Dec\", value: (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\") }); }\n  if (v instanceof Map) return \"{\\\"tag\\\":\\\"Map\\\",\\\"entries\\\":[\" + [...v].map(([k, x]) => \"[\" + $mjson(k) + \",\" + $mjson(x) + \"]\").join(\",\") + \"}]}\";\n  if (v instanceof Set) return \"{\\\"tag\\\":\\\"Set\\\",\\\"items\\\":[\" + [...v].map($mjson).join(\",\") + \"}]}\";\n  if (Array.isArray(v)) return \"[\" + v.map($mjson).join(\",\") + \"]\";\n  if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $mjson(v[k])).join(\",\") + \"}\"; }\n  return JSON.stringify(v);\n}\nfunction $print_m(v) {\n  if (v instanceof Map) return v.size === 0 ? \"(map)\" : \"(map \" + [...v].map(([k, x]) => \"(\" + $print_m(k) + \" \" + $print_m(x) + \")\").join(\" \") + \")\";\n  if (v instanceof Set) return v.size === 0 ? \"(set)\" : \"(set \" + [...v].map($print_m).join(\" \") + \")\";\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (typeof v === \"bigint\") return $print_dec(v);\n  if (Array.isArray(v)) return \"[\" + v.map($print_m).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print_m(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print_m(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print_m(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $obj_to_map(o) {\n  const ks = Object.keys(o);\n  ks.sort((a, b) => { const pa = [...a]; const pb = [...b]; const n = Math.min(pa.length, pb.length); for (let i = 0; i < n; i++) { const d = pa[i].codePointAt(0) - pb[i].codePointAt(0); if (d !== 0) return d; } return pa.length - pb.length; });\n  const m = new Map();\n  for (const k of ks) m.set(k, o[k]);\n  return m;\n}\n";
+const MAP_JS: &str = "function $mjson(v) {\n  if (typeof v === \"bigint\") { const neg = v < 0n; const a = neg ? -v : v; const i = a / 1000000000000000000n; const f = a % 1000000000000000000n; return JSON.stringify({ tag: \"Dec\", value: (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\") }); }\n  if (v instanceof Map) return \"{\\\"tag\\\":\\\"Map\\\",\\\"entries\\\":[\" + [...v].map(([k, x]) => \"[\" + $mjson(k) + \",\" + $mjson(x) + \"]\").join(\",\") + \"}]}\";\n  if (v instanceof Uint8Array) return \"[\" + [...v].join(\",\") + \"]\";\n  if (v instanceof Set) return \"{\\\"tag\\\":\\\"Set\\\",\\\"items\\\":[\" + [...v].map($mjson).join(\",\") + \"}]}\";\n  if (Array.isArray(v)) return \"[\" + v.map($mjson).join(\",\") + \"]\";\n  if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $mjson(v[k])).join(\",\") + \"}\"; }\n  return JSON.stringify(v);\n}\nfunction $print_m(v) {\n  if (v instanceof Map) return v.size === 0 ? \"(map)\" : \"(map \" + [...v].map(([k, x]) => \"(\" + $print_m(k) + \" \" + $print_m(x) + \")\").join(\" \") + \")\";\n  if (v instanceof Set) return v.size === 0 ? \"(set)\" : \"(set \" + [...v].map($print_m).join(\" \") + \")\";\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (typeof v === \"bigint\") return $print_dec(v);\n  if (Array.isArray(v)) return \"[\" + v.map($print_m).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print_m(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print_m(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print_m(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $obj_to_map(o) {\n  const ks = Object.keys(o);\n  ks.sort((a, b) => { const pa = [...a]; const pb = [...b]; const n = Math.min(pa.length, pb.length); for (let i = 0; i < n; i++) { const d = pa[i].codePointAt(0) - pb[i].codePointAt(0); if (d !== 0) return d; } return pa.length - pb.length; });\n  const m = new Map();\n  for (const k of ks) m.set(k, o[k]);\n  return m;\n}\n";
 
 // design/interp-capability.md §1.5/§7: ref の JS 写像は { value } オブジェクト。
 // 参照等価のため非列挙のマーカを付ける（Object.keys や $mjson には出ない）。
@@ -67,6 +67,26 @@ fn defs_use_clock(defs: &[CoreDef]) -> bool {
 
 /// §4: elapsed! の基準時刻（モジュール先頭で1度だけ評価）
 const NOW_JS: &str = "const $BOOT_NOW = Date.now();\n";
+
+/// §4.1: read-file! の JS 写像（Node fs。戻り値は Promise<Result<Uint8Array, io-error>>>）
+const READFILE_JS: &str = "async function $read_file(p) { try { const b = await $fs.readFile(p); return { tag: \"Ok\", value: new Uint8Array(b) }; } catch (e) { return { tag: \"Err\", value: { tag: \"io-error\" } }; } }\n";
+
+fn core_uses_read_file(e: &Core) -> bool {
+    let mut sites = Vec::new();
+    find_effect_calls(e, &mut sites);
+    sites.iter().any(|s| s.effect.as_ref() == "read-file")
+}
+
+fn defs_use_read_file(defs: &[CoreDef]) -> bool {
+    defs.iter().any(|d| match d {
+        CoreDef::Defn { body, .. } => core_uses_read_file(body),
+        CoreDef::Example {
+            actual, expected, ..
+        } => core_uses_read_file(actual) || core_uses_read_file(expected),
+        CoreDef::Prop { body, .. } => core_uses_read_file(body),
+        _ => false,
+    })
+}
 
 fn defs_use_builtin_ref(defs: &[CoreDef]) -> bool {
     defs.iter().any(|d| match d {
@@ -633,6 +653,7 @@ struct Gen<'a> {
     decimal_used: bool,
     builtin_ref_used: bool,
     clock_used: bool,
+    read_file_used: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -667,6 +688,7 @@ impl<'a> Gen<'a> {
         let uses_async = defs_use_async(&input.defs, &impure_defs);
         let builtin_ref_used = defs_use_builtin_ref(&input.defs);
         let clock_used = defs_use_clock(&input.defs);
+        let read_file_used = defs_use_read_file(&input.defs);
         Gen {
             user_names,
             export_names,
@@ -684,6 +706,7 @@ impl<'a> Gen<'a> {
             uses_async,
             builtin_ref_used,
             clock_used,
+            read_file_used,
             decimal_used: defs_use_decimal(&input.defs),
         }
     }
@@ -735,8 +758,15 @@ impl<'a> Gen<'a> {
         if !imports.is_empty() {
             out += &format!("import {{ {} }} from \"./runtime.js\";\n", imports.join(", "));
         }
-        if self.stdlib_used.contains("slice") || self.stdlib_used.contains("str-slice") {
+        if self.stdlib_used.contains("slice")
+            || self.stdlib_used.contains("str-slice")
+            || self.stdlib_used.contains("bytes-slice")
+        {
             out += SLICE_BOUNDS_JS;
+        }
+        if self.read_file_used {
+            out += "import * as $fs from \"node:fs/promises\";\n";
+            out += READFILE_JS;
         }
         if self.stdlib_used.contains("str") {
             out += PRINT_JS;
@@ -887,6 +917,25 @@ impl<'a> Gen<'a> {
             "builder-push" => "(b, s) => [...b, s]".to_string(),
             "builder->str" => "(b) => b.join(\"\")".to_string(),
             "builder-join" => "(arr, sep) => arr.join(sep)".to_string(),
+            // design/interp-capability.md §1.4: bytes は JS では Uint8Array（不変。変更操作はstdlibに存在しない）
+            // bytes-get は nth と同じく Option（範囲外は null=nil）、小数添字は切り捨て
+            "bytes-get" => format!(
+                "(b, i) => {{ const k = Math.trunc(i); return (Number.isNaN(i) || i < 0 || k >= b.length) ? null : b[k]; }}"
+            ),
+            "bytes-len" => "(b) => b.length".to_string(),
+            "bytes-slice" => "(b, i, j) => { const [a, z] = $slice_bounds(b.length, i, j); return b.slice(a, z); }".to_string(),
+            "str->bytes" => "(s) => new TextEncoder().encode(s)".to_string(),
+            "bytes->str" => {
+                let ok = self.runtime_ref("ok");
+                let err = self.runtime_ref("err");
+                format!("(b) => {{ try {{ return {ok}(new TextDecoder(\"utf-8\", {{ fatal: true }}).decode(b)); }} catch (e) {{ return {err}({{ tag: \"invalid-utf8\" }}); }} }}")
+            }
+            "str->codepoints" => "(s) => [...s].map((c) => c.codePointAt(0))".to_string(),
+            "codepoints->str" => {
+                let ok = self.runtime_ref("ok");
+                let err = self.runtime_ref("err");
+                format!("(arr) => {{ for (const n of arr) {{ if (!Number.isInteger(n) || n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF)) return {err}({{ tag: \"invalid-code\" }}); }} return {ok}(arr.map((n) => String.fromCodePoint(n)).join(\"\")); }}")
+            }
             other => format!(
                 "(() => {{ throw new Error('unsupported stdlib: ' + {other:?}); }})"
             ),
@@ -1470,6 +1519,12 @@ impl<'a> Gen<'a> {
                             w.write("(console.error(");
                             self.expr(&args[0], ind, w);
                             w.write("), null)");
+                        }
+                        // §4.1: read-file! → Node fs（非同期）。差分テスト対象外（FS は非決定的）
+                        "read-file" => {
+                            w.write("$read_file(");
+                            self.expr(&args[0], ind, w);
+                            w.write(")");
                         }
                         _ => unreachable!(),
                     }

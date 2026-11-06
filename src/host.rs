@@ -74,6 +74,7 @@ pub fn default_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Map(..) => Some(Value::Map(Rc::new(crate::pmap::PersistentMap::new()))),
         Type::Set(_) => Some(Value::Set(Rc::new(crate::pmap::PersistentMap::new()))),
         Type::Builder => Some(Value::Builder(Rc::new(Vec::new()))),
+        Type::Bytes => Some(Value::Bytes(Rc::new(Vec::new()))),
         // ref は構築不可（エフェクト経由のみ）
         Type::Ref(_) => None,
         Type::Union(members) => {

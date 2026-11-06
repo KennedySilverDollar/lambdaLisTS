@@ -276,6 +276,57 @@ fn builtin_host_effect_diagnostics() {
     assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
 }
 
+// design/interp-capability.md §4.1: read-file! はモックの仮想ファイルから読む（決定的）。
+// 無いファイルは (err (obj (tag "io-error")))。JS 差分テストからは除外（Node fs 依存）。
+#[test]
+fn read_file_effect_reads_virtual_files_and_io_error_on_missing() {
+    let src = "(defn! load-len (host : (obj)) (p : string) : (Result number (obj (tag \"io-error\")))\n\
+               (do [b (read-file! p)]\n\
+                 (ok (bytes-len b))))\n\
+               (example (load-len (obj) \"a.txt\") => (ok 3))\n\
+               (example (load-len (obj) \"missing.txt\") => (err (obj (tag \"io-error\"))))\n";
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(src, "test.lts", &mut cache);
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+    let lex = lists::lexer::tokenize(src, "test.lts");
+    let (program, _) = lists::parser::parse_program(&lex);
+    let (defs, _) = lists::desugar::desugar(&program);
+    let env = lists::eval::global_env();
+    lists::eval::load_defs(&defs, &env);
+    let mut interp = lists::eval::Interp::new();
+    interp.virtual_files.insert("a.txt".to_string(), b"abc".to_vec());
+    let results = lists::eval::run_examples(&mut interp, &defs, &env).expect("run");
+    assert!(
+        results.iter().all(|r| r.pass),
+        "{:?}",
+        results.iter().map(|r| lists::value::print_value(&r.actual)).collect::<Vec<_>>()
+    );
+
+    // 純粋 defn から read-file! → effect-violation（fix: defn!）
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn bad (p : string) : (Result bytes (obj (tag \"io-error\"))) (read-file! p))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res
+        .diagnostics
+        .iter()
+        .any(|d| d.kind == DiagKind::EffectViolation));
+
+    // JS 生成は Node fs（node:fs/promises）へ写像される（実行は差分テスト対象外）
+    let out = lists::emit::emit(&lists::emit::EmitInput {
+        defs,
+        file: "rf.js".to_string(),
+        source_file: "test.lts".to_string(),
+        type_names: BTreeSet::new(),
+        impure_names: BTreeSet::from(["load-len".to_string()]),
+    })
+    .expect("emit");
+    assert!(out.js.contains("node:fs/promises"), "{}", out.js);
+    assert!(out.js.contains("$read_file("), "{}", out.js);
+}
+
 #[test]
 fn t2_stock_non_exhaustive_with_fix_golden() {
     let res = check_fixture("stock.lts");

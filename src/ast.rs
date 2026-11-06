@@ -57,6 +57,7 @@ pub enum Prim {
     Bool,
     Char,
     Builder,
+    Bytes,
     Nil,
 }
 
