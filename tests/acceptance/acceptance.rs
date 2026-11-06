@@ -133,6 +133,69 @@ fn obj_to_map_infers_union_value_type() {
         .any(|d| d.kind == DiagKind::TypeMismatch));
 }
 
+// design/interp-capability.md §2.1: letrec の束縛対象は Lam のみ。それ以外は type-mismatch + fix。
+#[test]
+fn letrec_non_lam_binding_is_type_mismatch_with_fix() {
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn f () : number (letrec [x 1] x))",
+        "test.lts",
+        &mut cache,
+    );
+    let d = res
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == DiagKind::TypeMismatch)
+        .expect("type-mismatch");
+    assert!(matches!(
+        &d.fix,
+        Some(lists::diagnostic::Patch::Replace { template, .. }) if template == "(fn () : nil 1)"
+    ));
+
+    // Lam なら通る
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn f (n : number) : number (letrec [g (fn (k : number) : number k)] (g n)))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+}
+
+// design/interp-capability.md §1.5: ref! / ref-get! / ref-set! は組み込みエフェクト。
+// 純粋 defn から呼ぶと effect-violation + fix（defn! へ）。defn! からは正常動作。
+#[test]
+fn ref_builtin_effect_violation_in_pure_defn_and_ok_in_defn_bang() {
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn bad () : (ref number) (ref! 0))",
+        "test.lts",
+        &mut cache,
+    );
+    let d = res
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == DiagKind::EffectViolation)
+        .expect("effect-violation");
+    assert!(matches!(
+        &d.fix,
+        Some(lists::diagnostic::Patch::Replace { template, .. }) if template == "defn!"
+    ));
+
+    let mut cache = ModuleCache::default();
+    let res = lists::check::check_source(
+        "(defn! ok (host : (obj)) : (ref number) (ref! 0))",
+        "test.lts",
+        &mut cache,
+    );
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+    let types = lists::check::type_of_all(&res);
+    assert_eq!(
+        types.get("ok"),
+        Some(&"(fn ((obj )) : (ref number))".to_string())
+    );
+}
+
 #[test]
 fn t2_stock_non_exhaustive_with_fix_golden() {
     let res = check_fixture("stock.lts");

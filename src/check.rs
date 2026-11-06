@@ -495,6 +495,10 @@ impl<'a> Checker<'a> {
         let mut sites = Vec::new();
         find_effect_calls(body, &mut sites);
         for site in &sites {
+            // 組み込みエフェクト（ref 系）は host ハンドラ不要（design §1.5: 言語内完結）
+            if crate::effects::is_builtin_ref_effect(&site.effect) {
+                continue;
+            }
             let Some(sig) = self.effects.get(&site.effect).cloned() else {
                 continue;
             };
@@ -535,6 +539,7 @@ impl<'a> Checker<'a> {
                 Type::Array(el) => Type::Array(Box::new(rename(el, map))),
                 Type::Map(k, v) => Type::Map(Box::new(rename(k, map)), Box::new(rename(v, map))),
                 Type::Set(k) => Type::Set(Box::new(rename(k, map))),
+                Type::Ref(inner) => Type::Ref(Box::new(rename(inner, map))),
                 Type::Union(ms) => Type::Union(ms.iter().map(|m| rename(m, map)).collect()),
                 Type::Obj(fields) => Type::Obj(
                     fields
@@ -607,6 +612,7 @@ impl<'a> Checker<'a> {
                 self.check_map_key(k, span, path, t);
                 self.validate_container_keys(k, span, path);
             }
+            Type::Ref(inner) => self.validate_container_keys(inner, span, path),
             Type::Array(el) => self.validate_container_keys(el, span, path),
             Type::Union(ms) => {
                 for m in ms {
@@ -865,6 +871,51 @@ impl<'a> Checker<'a> {
                 self.scope.pop();
                 r
             }
+            Core::Letrec {
+                name,
+                lam,
+                body,
+                ..
+            } => {
+                // design §2.1: 束縛対象は Lam のみ。違反は type-mismatch + fix（§9.3）。
+                if !matches!(lam.as_ref(), Core::Lam { .. }) {
+                    let lt = self.infer(lam, &ast_path(path, &["lam"]));
+                    let lam_path = ast_path(path, &["lam"]);
+                    let want = Type::FnT(vec![], Box::new(self.fresh()));
+                    let act = print_type(&apply_subst(&lt, &self.subst), &self.aliases);
+                    let exp = print_type(&want, &self.aliases);
+                    self.diag(
+                        DiagKind::TypeMismatch,
+                        lam.span().clone(),
+                        format!("letrec の束縛対象は fn (Lam) のみです: 期待 {exp}、実際 {act}"),
+                        Some(json!({ "path": lam_path, "expected": exp, "actual": act })),
+                        Some(Patch::Replace {
+                            path: lam_path,
+                            template: format!("(fn () : nil {})", crate::prop::print_core(lam)),
+                        }),
+                        Severity::Error,
+                    );
+                    return Type::Nil;
+                }
+                // Lam は注釈から関数型が分かるので、本体検査前に束縛名へその型を入れる
+                //（自己参照 (go ...) が fn 型として検査できるようにするため）。
+                let lt = if let Core::Lam { params, ret, span, .. } = lam.as_ref() {
+                    let ptypes: Vec<Type> = params
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| self.resolve(&p.ty, span, &ast_path(path, &["lam", "params", &i.to_string()])))
+                        .collect();
+                    let ret_t = self.resolve(ret, span, &ast_path(path, &["lam", "ret"]));
+                    Type::FnT(ptypes, Box::new(ret_t))
+                } else {
+                    self.fresh()
+                };
+                self.scope.push(BTreeMap::from([(name.clone(), lt)]));
+                let _ = self.infer(lam, &ast_path(path, &["lam"]));
+                let r = self.infer(body, &ast_path(path, &["body"]));
+                self.scope.pop();
+                r
+            }
             Core::If {
                 cond,
                 then,
@@ -932,7 +983,12 @@ impl<'a> Checker<'a> {
                 span,
                 ..
             } => {
-                let Some(sig) = self.effects.get(effect).cloned() else {
+                // design §1.5: ref 系は組み込みエフェクト（effect 宣言不要）
+                let sig = if let Some(scheme) = crate::effects::builtin_effect_scheme(effect) {
+                    self.instantiate(&scheme)
+                } else if let Some(s) = self.effects.get(effect) {
+                    s.clone()
+                } else {
                     self.diag(
                         DiagKind::UnknownEffect,
                         span.clone(),

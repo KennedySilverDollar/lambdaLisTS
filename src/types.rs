@@ -17,6 +17,8 @@ pub enum Type {
     Obj(BTreeMap<Rc<str>, Type>),
     Map(Box<Type>, Box<Type>),      // (map K V) — design/interp-capability.md §1.1
     Set(Box<Type>),                 // (set K)
+    Ref(Box<Type>),                 // (ref T) — §1.5（エフェクト型のセル）
+    Builder,                        // builder プリミティブ — §3.2
     ResultT(Box<Type>, Box<Type>),
     FnT(Vec<Type>, Box<Type>),
     Var(usize),
@@ -50,6 +52,8 @@ pub fn structural_equal(a: &Type, b: &Type) -> bool {
             structural_equal(xk, yk) && structural_equal(xv, yv)
         }
         (Type::Set(x), Type::Set(y)) => structural_equal(x, y),
+        (Type::Ref(x), Type::Ref(y)) => structural_equal(x, y),
+        (Type::Builder, Type::Builder) => true,
         (Type::Union(xs), Type::Union(ys)) => {
             if xs.len() != ys.len() {
                 return false;
@@ -138,6 +142,8 @@ fn normalize_type_seen(t: &Type, aliases: &AliasEnv, seen: &mut BTreeSet<Rc<str>
             Box::new(normalize_type_seen(v, aliases, seen)),
         ),
         Type::Set(k) => Type::Set(Box::new(normalize_type_seen(k, aliases, seen))),
+        Type::Ref(inner) => Type::Ref(Box::new(normalize_type_seen(inner, aliases, seen))),
+        Type::Builder => Type::Builder,
         Type::Obj(fields) => Type::Obj(
             fields
                 .iter()
@@ -165,6 +171,7 @@ pub fn find_unresolved_alias(t: &Type) -> Option<Rc<str>> {
         Type::Array(el) => find_unresolved_alias(el),
         Type::Map(k, v) => find_unresolved_alias(k).or_else(|| find_unresolved_alias(v)),
         Type::Set(k) => find_unresolved_alias(k),
+        Type::Ref(inner) => find_unresolved_alias(inner),
         Type::Union(members) => members.iter().find_map(find_unresolved_alias),
         Type::Obj(fields) => fields.values().find_map(find_unresolved_alias),
         Type::ResultT(ok, err) => find_unresolved_alias(ok).or_else(|| find_unresolved_alias(err)),
@@ -211,6 +218,8 @@ fn print_type_seen(t: &Type, aliases: &AliasEnv, seen: &mut BTreeSet<Rc<str>>) -
             print_type_seen(v, aliases, seen)
         ),
         Type::Set(k) => format!("(set {})", print_type_seen(k, aliases, seen)),
+        Type::Ref(inner) => format!("(ref {})", print_type_seen(inner, aliases, seen)),
+        Type::Builder => "builder".to_string(),
         Type::Union(members) => {
             let members = normalize_union(members.clone(), aliases);
             let non_nil: Vec<&Type> = members.iter().filter(|m| !matches!(m, Type::Nil)).collect();

@@ -73,6 +73,9 @@ pub fn default_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Array(_) => Some(Value::Array(Vec::new())),
         Type::Map(..) => Some(Value::Map(Rc::new(crate::pmap::PersistentMap::new()))),
         Type::Set(_) => Some(Value::Set(Rc::new(crate::pmap::PersistentMap::new()))),
+        Type::Builder => Some(Value::Builder(Rc::new(Vec::new()))),
+        // ref は構築不可（エフェクト経由のみ）
+        Type::Ref(_) => None,
         Type::Union(members) => {
             if members.iter().any(|m| matches!(normalize_type(m, aliases), Type::Nil)) {
                 Some(Value::Nil)

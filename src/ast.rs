@@ -56,6 +56,7 @@ pub enum Prim {
     Str,
     Bool,
     Char,
+    Builder,
     Nil,
 }
 
@@ -182,6 +183,11 @@ pub enum TypeExpr {
         trivia: Trivia,
         span: Span,
     },
+    Ref {
+        inner: Box<TypeExpr>,
+        trivia: Trivia,
+        span: Span,
+    },
     ResultT {
         ok: Box<TypeExpr>,
         err: Box<TypeExpr>,
@@ -211,6 +217,7 @@ impl TypeExpr {
             | TypeExpr::Obj { span, .. }
             | TypeExpr::Map { span, .. }
             | TypeExpr::Set { span, .. }
+            | TypeExpr::Ref { span, .. }
             | TypeExpr::ResultT { span, .. }
             | TypeExpr::FnT { span, .. }
             | TypeExpr::Error { span, .. } => span,
@@ -262,6 +269,14 @@ pub enum Expr {
     Let {
         binds: Vec<Bind>,
         body: Box<Expr>,
+        trivia: Trivia,
+        span: Span,
+    },
+    /// design/interp-capability.md §2.1: (letrec [name lam-expr] body...)
+    Letrec {
+        name: Rc<str>,
+        lam: Box<Expr>,
+        body: Vec<Expr>,
         trivia: Trivia,
         span: Span,
     },
@@ -340,6 +355,7 @@ impl Expr {
             | Expr::FieldAccess { span, .. }
             | Expr::App { span, .. }
             | Expr::Let { span, .. }
+            | Expr::Letrec { span, .. }
             | Expr::If { span, .. }
             | Expr::When { span, .. }
             | Expr::Cond { span, .. }

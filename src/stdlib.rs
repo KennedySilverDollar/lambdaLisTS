@@ -237,5 +237,22 @@ pub fn stdlib() -> BTreeMap<Rc<str>, Scheme> {
         entry("char-alphabetic?", vec![], fn_t(vec![char_t.clone()], bool_t.clone())),
         entry("char-numeric?", vec![], fn_t(vec![char_t.clone()], bool_t.clone())),
         entry("char-whitespace?", vec![], fn_t(vec![char_t.clone()], bool_t.clone())),
+        // design/interp-capability.md §3.2: builder（純粋・不変値。str→string）
+        entry("builder-empty", vec![], fn_t(vec![], Type::Builder)),
+        entry(
+            "builder-push",
+            vec![],
+            fn_t(vec![Type::Builder, str_t.clone()], Type::Builder),
+        ),
+        entry(
+            "builder->str",
+            vec![],
+            fn_t(vec![Type::Builder], str_t.clone()),
+        ),
+        entry(
+            "builder-join",
+            vec![],
+            fn_t(vec![arr(str_t.clone()), str_t.clone()], str_t.clone()),
+        ),
     ])
 }

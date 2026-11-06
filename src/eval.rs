@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -514,6 +515,37 @@ impl Interp {
             BuiltinKind::CharAlphabetic => Ok(Value::Bool(char_v(&args[0])?.is_alphabetic())),
             BuiltinKind::CharNumeric => Ok(Value::Bool(char_v(&args[0])?.is_numeric())),
             BuiltinKind::CharWhitespace => Ok(Value::Bool(char_v(&args[0])?.is_whitespace())),
+            BuiltinKind::BuilderEmpty => Ok(Value::Builder(Rc::new(Vec::new()))),
+            BuiltinKind::BuilderPush => {
+                let b = match &args[0] {
+                    Value::Builder(b) => Rc::clone(b),
+                    _ => return Err(EvalError::Runtime("builder が必要です".to_string())),
+                };
+                let s = str_v(&args[1])?;
+                // 共有されていなければ in-place（線形利用で償却 O(1)）。共有時のみ複製（永続性維持）。
+                let mut nb = b;
+                Rc::make_mut(&mut nb).push(s.to_string());
+                Ok(Value::Builder(nb))
+            }
+            BuiltinKind::BuilderToStr => {
+                let parts = match &args[0] {
+                    Value::Builder(b) => b.clone(),
+                    _ => return Err(EvalError::Runtime("builder が必要です".to_string())),
+                };
+                Ok(Value::Str(Rc::from(parts.join("").as_str())))
+            }
+            BuiltinKind::BuilderJoin => {
+                let arr = arr_v(&args[0])?;
+                let sep = str_v(&args[1])?;
+                let mut out = String::new();
+                for (i, x) in arr.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(&sep);
+                    }
+                    out.push_str(&str_v(x)?);
+                }
+                Ok(Value::Str(Rc::from(out.as_str())))
+            }
             BuiltinKind::HostMock {
                 effect,
                 default,
@@ -625,6 +657,35 @@ fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, Eval
                 env = Env::child_of(&env, BTreeMap::from([(name, v)]));
                 *body
             }
+            Core::Letrec {
+                name,
+                lam,
+                body,
+                span,
+            } => {
+                // design §2.1: 束縛対象は Lam のみ（check で検査済み）。自己参照環境を作る。
+                let Core::Lam {
+                    params,
+                    body: lam_body,
+                    ..
+                } = lam.as_ref()
+                else {
+                    return Err(EvalError::Runtime(format!(
+                        "letrec の束縛対象は fn のみです（span {:?}）",
+                        span
+                    )));
+                };
+                let child = Env::child_of(&env, BTreeMap::new());
+                let clo = Value::Closure(Rc::new(Closure {
+                    params: params.clone(),
+                    body: Rc::new((**lam_body).clone()),
+                    env: child.clone(),
+                    name: Some(name.clone()),
+                }));
+                child.define(name.clone(), clo);
+                env = child;
+                return eval_core(interp, &body, &env);
+            }
             Core::If {
                 cond,
                 then,
@@ -703,6 +764,28 @@ fn eval_loop(interp: &mut Interp, e: &Core, env: &Rc<Env>) -> Result<Value, Eval
                 args,
                 ..
             } => {
+                // design §1.5: ref 系は言語内完結の組み込みエフェクト（host 不要）
+                if crate::effects::is_builtin_ref_effect(effect.as_ref()) {
+                    let mut argv = Vec::with_capacity(args.len());
+                    for a in &args {
+                        argv.push(eval_core(interp, a, &env)?);
+                    }
+                    return match effect.as_ref() {
+                        "ref" => Ok(Value::Ref(Rc::new(RefCell::new(argv[0].clone())))),
+                        "ref-get" => match &argv[0] {
+                            Value::Ref(r) => Ok(r.borrow().clone()),
+                            _ => Err(EvalError::Runtime("ref-get! は ref が必要です".to_string())),
+                        },
+                        "ref-set" => match &argv[0] {
+                            Value::Ref(r) => {
+                                *r.borrow_mut() = argv[1].clone();
+                                Ok(Value::Nil)
+                            }
+                            _ => Err(EvalError::Runtime("ref-set! は ref が必要です".to_string())),
+                        },
+                        _ => unreachable!(),
+                    };
+                }
                 // P1 (§12.4/§12.6): EffectCall は host オブジェクトのハンドラを呼ぶ。
                 // host は囲んでいる defn! の第1引数として束縛されている。
                 let hv = env.lookup(host.as_ref()).ok_or_else(|| {
@@ -855,6 +938,10 @@ pub fn stdlib_env() -> Rc<Env> {
     def("char-alphabetic?", BuiltinKind::CharAlphabetic);
     def("char-numeric?", BuiltinKind::CharNumeric);
     def("char-whitespace?", BuiltinKind::CharWhitespace);
+    def("builder-empty", BuiltinKind::BuilderEmpty);
+    def("builder-push", BuiltinKind::BuilderPush);
+    def("builder->str", BuiltinKind::BuilderToStr);
+    def("builder-join", BuiltinKind::BuilderJoin);
     env
 }
 

@@ -211,6 +211,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         ),
         Value::Ok(x) => json!({ "tag": "Ok", "value": value_to_json(x) }),
         Value::Err(x) => json!({ "tag": "Err", "value": value_to_json(x) }),
+        Value::Ref(_) => serde_json::Value::String("<ref>".to_string()),
+        Value::Builder(parts) => serde_json::Value::Array(parts.iter().map(|p| serde_json::Value::String(p.clone())).collect()),
         Value::Map(m) => json!({
             "tag": "Map",
             "entries": m.entries().iter().map(|(k, v)| json!([value_to_json(&k.to_value()), value_to_json(v)])).collect::<Vec<_>>()

@@ -178,6 +178,7 @@ fn print_expr(e: &Expr, ind: &str) -> String {
         | Expr::FieldAccess { trivia, .. }
         | Expr::App { trivia, .. }
         | Expr::Let { trivia, .. }
+        | Expr::Letrec { trivia, .. }
         | Expr::If { trivia, .. }
         | Expr::When { trivia, .. }
         | Expr::Cond { trivia, .. }
@@ -214,6 +215,16 @@ fn print_expr(e: &Expr, ind: &str) -> String {
                 .map(|b| format!("{} {}", b.name, print_expr(&b.expr, ind)))
                 .collect();
             join_list("let", &[format!("[{}]", binds_s.join(" ")), print_expr(body, ind)], ind)
+        }
+        Expr::Letrec {
+            name,
+            lam,
+            body,
+            ..
+        } => {
+            let mut parts = vec![format!("[{name} {}]", print_expr(lam, ind))];
+            parts.extend(body.iter().map(|e| print_expr(e, ind)));
+            join_list("letrec", &parts, ind)
         }
         Expr::If {
             cond,
@@ -326,6 +337,7 @@ fn print_type(t: &TypeExpr) -> String {
             Prim::Str => "string",
             Prim::Bool => "bool",
             Prim::Char => "char",
+            Prim::Builder => "builder",
             Prim::Nil => "nil",
         }
         .to_string(),
@@ -348,6 +360,7 @@ fn print_type(t: &TypeExpr) -> String {
         ),
         TypeExpr::Map { key, value, .. } => format!("(map {} {})", print_type(key), print_type(value)),
         TypeExpr::Set { key, .. } => format!("(set {})", print_type(key)),
+        TypeExpr::Ref { inner, .. } => format!("(ref {})", print_type(inner)),
         TypeExpr::ResultT { ok, err, .. } => {
             format!("(Result {} {})", print_type(ok), print_type(err))
         }
@@ -426,7 +439,7 @@ mod tests {
 
     #[test]
     fn fmt_is_idempotent_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts", "char-edge.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "cycle-a.lts", "fact.lts", "map-edge.lts", "char-edge.lts", "letrec-ref-builder.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name);
             assert!(once.diagnostics.is_empty(), "{name}: {:?}", once.diagnostics);
@@ -438,11 +451,24 @@ mod tests {
 
     #[test]
     fn fmt_preserves_ast_on_fixtures() {
-        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts", "char-edge.lts"] {
+        for name in ["money.lts", "cart.lts", "stock.lts", "effects.lts", "map-edge.lts", "char-edge.lts", "letrec-ref-builder.lts"] {
             let src = fixture_src(name);
             let once = format_source(&src, name).output;
             assert_eq!(ast_json(&src, name), ast_json(&once, name), "{name}");
         }
+    }
+
+    #[test]
+    fn fmt_letrec_and_ref_roundtrip() {
+        let src = "(defn f (n : number) : number\n  (letrec [g (fn (k : number) : number k)] (g n)))\n\
+                   (defn! h (host : (obj)) : (ref number) (ref! 0))\n";
+        let once = format_source(src, "t.lts").output;
+        assert!(once.contains("(letrec [g (fn (k : number) : number k)]"), "{once}");
+        assert!(once.contains("(ref! 0)"), "{once}");
+        assert!(once.contains("(ref number)"), "{once}");
+        let twice = format_source(&once, "t.lts").output;
+        assert_eq!(once, twice, "fmt は冪等");
+        assert_eq!(ast_json(src, "t.lts"), ast_json(&once, "t.lts"));
     }
 
     #[test]

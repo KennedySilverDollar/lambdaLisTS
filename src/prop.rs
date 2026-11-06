@@ -32,6 +32,8 @@ pub fn is_generatable(ty: &Type, aliases: &AliasEnv) -> bool {
         Type::Array(t) => is_generatable(&t, aliases),
         Type::Map(k, v) => is_generatable(&k, aliases) && is_generatable(&v, aliases),
         Type::Set(k) => is_generatable(&k, aliases),
+        Type::Builder => true,
+        Type::Ref(_) => false,
         Type::Union(ms) => ms.iter().all(|m| is_generatable(m, aliases)),
         Type::Obj(fields) => fields.values().all(|t| is_generatable(t, aliases)),
         Type::ResultT(t, e) => is_generatable(&t, aliases) && is_generatable(&e, aliases),
@@ -131,6 +133,17 @@ pub fn gen_value(ty: &Type, aliases: &AliasEnv, rng: &mut Rng, depth: usize) -> 
             }
             Some(Value::Set(Rc::new(m)))
         }
+        Type::Builder => {
+            let n = rng.gen_range(0, 4) as usize;
+            let mut parts = Vec::with_capacity(n);
+            for _ in 0..n {
+                if let Some(Value::Str(st)) = gen_value(&Type::Str, aliases, rng, depth + 1) {
+                    parts.push(st.to_string());
+                }
+            }
+            Some(Value::Builder(Rc::new(parts)))
+        }
+        Type::Ref(_) => None,
         Type::Union(members) => {
             let idx = rng.gen_range(0, (members.len().max(1) - 1) as u64) as usize;
             gen_value(&members[idx], aliases, rng, depth + 1)
@@ -159,6 +172,8 @@ pub fn min_value(ty: &Type, aliases: &AliasEnv) -> Option<Value> {
         Type::Array(_) => Some(Value::Array(Vec::new())),
         Type::Map(..) => Some(Value::Map(Rc::new(crate::pmap::PersistentMap::new()))),
         Type::Set(_) => Some(Value::Set(Rc::new(crate::pmap::PersistentMap::new()))),
+        Type::Builder => Some(Value::Builder(Rc::new(Vec::new()))),
+        Type::Ref(_) => None,
         Type::Obj(fields) => {
             let mut out = std::collections::BTreeMap::new();
             for (k, v) in &fields {
@@ -197,6 +212,8 @@ pub fn value_size(v: &Value) -> usize {
         }
         Value::Str(s) => s.chars().count(),
         Value::Char(_) => 1,
+        Value::Builder(parts) => 1 + parts.iter().map(|p| p.chars().count()).sum::<usize>(),
+        Value::Ref(_) => usize::MAX / 2,
         Value::Array(xs) => 1 + xs.iter().map(value_size).sum::<usize>(),
         Value::Obj(m) => 1 + m.values().map(value_size).sum::<usize>(),
         Value::Map(m) => 1 + m.entries().iter().map(|(k, v)| value_size(&k.to_value()) + value_size(v)).sum::<usize>(),
@@ -438,6 +455,11 @@ pub fn value_to_lit(v: &Value) -> String {
         Value::Err(x) => format!("(err {})", value_to_lit(x)),
         // map/set にはリテラル構文が無いため print_value 形式で印字（REPORT.md に記録）
         Value::Map(_) | Value::Set(_) => print_value(v),
+        Value::Ref(_) => "<ref>".to_string(),
+        Value::Builder(parts) => format!(
+            "(array {})",
+            parts.iter().map(|p| serde_json::to_string(p).unwrap_or_else(|_| format!("\"{p}\""))).collect::<Vec<_>>().join(" ")
+        ),
         // char はリテラル構文 `\<文字>` があるのでそれで印字
         Value::Char(c) => crate::fmt::print_char_lit(*c),
         Value::Dec(s) => crate::decimal::fmt_dec(*s),

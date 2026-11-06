@@ -404,3 +404,45 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 5. code->char は非整数を invalid-code とする（往復 code->char(char-code c)=ok c を優先）。trunc 方針もあり得たが記録のみ。
 6. JS で char（1要素文字列）と string は実行時同一なので、`=` は型検査でのみ区別（char vs string は unify 失敗）。JSON 直列化でも区別されない（上記）。
 7. 網羅性検査: char/number のリテラルパターン1つでは型全体をカバーしない（既存の P0 単純アルゴリズム §6.5 のまま）。char リテラルも同様。
+
+---
+
+## 20. interp-capability §3.2（builder）/ §2.1（letrec）/ §1.5（ref）の実装判断（SPEC.md は未変更）
+
+### builder（§3.2 C3）
+- `Type::Builder` / `Value::Builder(Rc<Vec<String>>)`。stdlib: builder-empty / builder-push / builder->str / builder-join（`(fn ((Array string) string) : string)`。design の `str` は string へ写像）。
+- 不変値: push は新しい builder を返す。実装は `Rc::make_mut` で「共有されていないときは in-place、共有時のみ複製」とし、線形利用では償却 O(1)（10^4 要素の畳み込みテストで確認）。JS 側は配列 `[...b, s]` + join（design §7 通り）。
+- 印字: JS 側が配列なので Rust も配列と同じ `[a b c]` 形式で統一（§11.6 に builder は未定義のための新規決定。REPORT 記録）。等価は要素列の構造等価。
+- JSON: 配列として直列化（JS と同一。example の actual に生の builder は出さない方針）。
+
+### letrec（§2.1 C5）
+- 構文 `(letrec [name lam-expr] body...)`（parser/ast/desugar/fmt/names）。body が複数ある場合は let _ の連鎖に脱糖し最後の式が値。
+- Core IR に `Core::Letrec { name, lam, body }` を追加。束縛対象が Lam でない場合は check で type-mismatch + fix（`(fn () : nil <expr>)` で包むテンプレート、§9.3）。
+- 型付け: Lam は注釈から関数型が分かるので、lam 本体の検査前に束縛名へその型を入れてから検査（自己参照が fn 型で検査できる）。
+- 評価: 自己参照環境を作り named closure を束縛。JS 生成は名前付き関数式 `const f = function f(...) {...}`（design §2.1 の直接写像）。letrec 内の自己末尾呼び出しは defn のような self-loop 最適化は行わず通常の再帰（深い letrec 再帰は JS でスタック制限あり。残課題として記録）。
+- **§8.5 との相互作用（ギャップ報告）**: SPEC §8.5 の末尾位置リストに Letrec は未記載。Letrec.body を Let.body と同じく末尾位置として実装（collect_tail_callees で in_tail 伝播）。SPEC への追記は行わず報告のみ。
+- 相互再帰（2つ以上の letrec 束縛の相互参照）は design 通り対象外（単一束縛のため外側の束縛名は内側 lam から見えない）。
+
+### ref（§1.5 C6）
+- `Type::Ref(Box<Type>)` / `Value::Ref(Rc<RefCell<Value>>)`。surface 型 `(ref T)`。
+- ref! / ref-get! / ref-set! は組み込みエフェクトとして EffectCall 経由で実装（effect 名 ref / ref-get / ref-set に組み込み scheme を登録、check で instantiate）。純粋 defn から呼ぶと既存のエフェクト検査により effect-violation + fix（defn→defn!）が自動で出る（テスト済み）。defn! の host ハンドラ検査は組み込みエフェクトをスキップ（host 能力ではなく言語内完結）。
+- design の `unit` 戻り値は現 SPEC に unit 型が無いため `nil` に写像（記録）。
+- `=` は参照等価（Rust は `Rc::ptr_eq`、JS は `{value}` オブジェクトに非列挙マーカ `__lists_ref__` を付けて structuralEqual で `a === b`）。設計 §1.5 の「循環 `=` は存在しない」は ref-set! で自己参照セルが作れるため反例あり。ただし参照等価なので循環検出は不要で両バックエンド一致。
+- JS 写像は design §7 通り `{ value }` オブジェクト（+ 非列挙マーカ）。ref の印字は Rust `<ref>`（JS 側の $print は `{value: ...}` となる諸元あり。example では ref を直接 str しない方針で回避。残課題として記録）。
+- ref! は defn! の do-bind 内で Result でなく生の値として束縛できる（既存の §7.4 rule 5 の仕組みをそのまま利用）。
+
+### テスト追加
+- `tests/fixtures/letrec-ref-builder.lts`（17 example: letrec 自己再帰 fact・親環境クロージャ make-adder・複数 body、builder 基本/不変性/印字/10^4 畳み込み len=38890、ref の set/get 往復・参照等価 self-eq/diff-ref・共有セル share）→ `diff::letrec_ref_builder_diff_interp_vs_backend`（interp vs compile+node 全一致、mock でも一致）
+- `acceptance::letrec_non_lam_binding_is_type_mismatch_with_fix`、`acceptance::ref_builtin_effect_violation_in_pure_defn_and_ok_in_defn_bang`
+- fmt: `fmt_letrec_and_ref_roundtrip` + fixture 一覧に letrec-ref-builder.lts 追加（冪等・AST 保存）
+
+### 検証
+- `cargo test` 261 全パス（257 + 4）、warning 0。`LISTS_BACKEND=mock` acceptance 21/21。
+- `lists compile letrec-ref-builder.lts` を2回実行しバイト一致、node で 17/17 example ok。`lists fmt` in-place 2回で安定。golden 無改変。`git diff -- SPEC.md` 空。
+
+### ギャップ・残課題（SPEC には報告のみ）
+1. §8.5 の末尾位置リストに Letrec.body が未記載 → Let.body と同じく末尾位置として実装（報告のみ、SPEC 未変更）。
+2. design の `unit`（ref-set! の戻り値）は現 SPEC に無いため nil に写像。
+3. letrec の自己末尾呼び出しは JS で self-loop 最適化せず通常再帰（defn の §8.5 最適化との差。深さに注意）。
+4. ref の印字: Rust `<ref>` / JS `{value: ...}` の差（$print は golden 都合で無改変のため）。`=` は参照等価で一致。
+5. 相互再帰 letrec は単一束縛のため不可（design §2.1「対象外」に一致）。

@@ -35,6 +35,28 @@ const PRINT_JS: &str = "function $print(v) {\n  if (v === null) return \"nil\";\
 // map/set 系 stdlib を使うときだけ出力し、既存の出力バイトには影響しない。
 const MAP_JS: &str = "function $mjson(v) {\n  if (typeof v === \"bigint\") { const neg = v < 0n; const a = neg ? -v : v; const i = a / 1000000000000000000n; const f = a % 1000000000000000000n; return JSON.stringify({ tag: \"Dec\", value: (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\") }); }\n  if (v instanceof Map) return \"{\\\"tag\\\":\\\"Map\\\",\\\"entries\\\":[\" + [...v].map(([k, x]) => \"[\" + $mjson(k) + \",\" + $mjson(x) + \"]\").join(\",\") + \"}]}\";\n  if (v instanceof Set) return \"{\\\"tag\\\":\\\"Set\\\",\\\"items\\\":[\" + [...v].map($mjson).join(\",\") + \"}]}\";\n  if (Array.isArray(v)) return \"[\" + v.map($mjson).join(\",\") + \"]\";\n  if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $mjson(v[k])).join(\",\") + \"}\"; }\n  return JSON.stringify(v);\n}\nfunction $print_m(v) {\n  if (v instanceof Map) return v.size === 0 ? \"(map)\" : \"(map \" + [...v].map(([k, x]) => \"(\" + $print_m(k) + \" \" + $print_m(x) + \")\").join(\" \") + \")\";\n  if (v instanceof Set) return v.size === 0 ? \"(set)\" : \"(set \" + [...v].map($print_m).join(\" \") + \")\";\n  if (v === null) return \"nil\";\n  if (typeof v === \"string\") return v;\n  if (typeof v === \"number\") return $print_num(v);\n  if (typeof v === \"boolean\") return v ? \"true\" : \"false\";\n  if (typeof v === \"bigint\") return $print_dec(v);\n  if (Array.isArray(v)) return \"[\" + v.map($print_m).join(\" \") + \"]\";\n  if (typeof v === \"object\") {\n    if (v.tag === \"Ok\" && Object.keys(v).length === 2 && \"value\" in v) return \"(ok \" + $print_m(v.value) + \")\";\n    if (v.tag === \"Err\" && Object.keys(v).length === 2 && \"value\" in v) return \"(err \" + $print_m(v.value) + \")\";\n    const ks = Object.keys(v).sort($cmp_str);\n    return \"{\" + ks.map((k) => k + \": \" + $print_m(v[k])).join(\", \") + \"}\";\n  }\n  return \"<fn>\";\n}\nfunction $obj_to_map(o) {\n  const ks = Object.keys(o);\n  ks.sort((a, b) => { const pa = [...a]; const pb = [...b]; const n = Math.min(pa.length, pb.length); for (let i = 0; i < n; i++) { const d = pa[i].codePointAt(0) - pb[i].codePointAt(0); if (d !== 0) return d; } return pa.length - pb.length; });\n  const m = new Map();\n  for (const k of ks) m.set(k, o[k]);\n  return m;\n}\n";
 
+// design/interp-capability.md §1.5/§7: ref の JS 写像は { value } オブジェクト。
+// 参照等価のため非列挙のマーカを付ける（Object.keys や $mjson には出ない）。
+// runtime.js の structuralEqual がこのマーカで a === b による参照等価にする。
+const REF_JS: &str = "function $ref_new(v) { const r = { value: v }; Object.defineProperty(r, \"__lists_ref__\", { value: true }); return r; }\n";
+
+fn core_uses_builtin_ref(e: &Core) -> bool {
+    let mut sites = Vec::new();
+    find_effect_calls(e, &mut sites);
+    sites.iter().any(|s| crate::effects::is_builtin_ref_effect(&s.effect))
+}
+
+fn defs_use_builtin_ref(defs: &[CoreDef]) -> bool {
+    defs.iter().any(|d| match d {
+        CoreDef::Defn { body, .. } => core_uses_builtin_ref(body),
+        CoreDef::Example {
+            actual, expected, ..
+        } => core_uses_builtin_ref(actual) || core_uses_builtin_ref(expected),
+        CoreDef::Prop { body, .. } => core_uses_builtin_ref(body),
+        _ => false,
+    })
+}
+
 const DEC_JS: &str = "const $DEC_S = 10n ** 18n;\nconst $DEC_MAX = 170141183460469231731687303715884105727n;\nfunction $dec_check(r) { if (r > $DEC_MAX || r < -$DEC_MAX) throw new Error(\"decimal-overflow\"); return r; }\nconst $dec_add = (a, b) => $dec_check(a + b);\nconst $dec_sub = (a, b) => $dec_check(a - b);\nconst $dec_mul = (a, b) => { const p = a * b; const neg = p < 0n; const ap = neg ? -p : p; let q = ap / $DEC_S; const r = ap % $DEC_S; if (2n * r >= $DEC_S) q += 1n; return $dec_check(neg ? -q : q); };\nconst $dec_div = (a, b) => { if (b === 0n) throw new Error(\"decimal-division-by-zero\"); const neg = (a < 0n) !== (b < 0n); const num = (a < 0n ? -a : a) * $DEC_S; const den = b < 0n ? -b : b; let q = num / den; const r = num % den; if (2n * r >= den) q += 1n; return $dec_check(neg ? -q : q); };\nfunction $print_dec(v) { const neg = v < 0n; const a = neg ? -v : v; const i = a / $DEC_S; const f = a % $DEC_S; return (neg ? \"-\" : \"\") + i.toString() + \".\" + f.toString().padStart(18, \"0\"); }\nconst $to_dec = (a) => { if (typeof a !== \"number\" || Number.isNaN(a) || !Number.isFinite(a)) throw new Error(\"decimal-overflow\"); const m = /^([+-]?)(\\d+)(?:\\.(\\d+))?e([+-]?\\d+)$/.exec(a.toExponential()); if (!m) throw new Error(\"decimal-overflow\"); const sign = m[1] === \"-\" ? -1n : 1n; const digits = m[2] + (m[3] || \"\"); const exp = parseInt(m[4], 10) - (m[3] || \"\").length + 18; const mant = BigInt(digits); let r; if (exp >= 0) { r = mant * 10n ** BigInt(exp); } else { const den = 10n ** BigInt(-exp); let q = mant / den; const rem = mant % den; if (2n * rem >= den) q += 1n; r = q; } return $dec_check(sign * r); };\nfunction $json(v) { if (typeof v === \"bigint\") return JSON.stringify({ tag: \"Dec\", value: $print_dec(v) }); if (Array.isArray(v)) return \"[\" + v.map($json).join(\",\") + \"]\"; if (v !== null && typeof v === \"object\") { const ks = Object.keys(v).sort(); return \"{\" + ks.map((k) => JSON.stringify(k) + \":\" + $json(v[k])).join(\",\") + \"}\"; } return JSON.stringify(v); }\n";
 
 pub fn js_name(name: &str) -> String {
@@ -145,6 +167,7 @@ fn contains_error_node(e: &Core) -> bool {
             contains_error_node(f) || args.iter().any(contains_error_node)
         }
         Core::Let { rhs, body, .. } => contains_error_node(rhs) || contains_error_node(body),
+        Core::Letrec { lam, body, .. } => contains_error_node(lam) || contains_error_node(body),
         Core::If {
             cond,
             then,
@@ -220,6 +243,7 @@ fn core_uses_decimal(e: &Core) -> bool {
         }
         Core::Lam { body, .. } => core_uses_decimal(body),
         Core::Let { rhs, body, .. } => core_uses_decimal(rhs) || core_uses_decimal(body),
+        Core::Letrec { lam, body, .. } => core_uses_decimal(lam) || core_uses_decimal(body),
         Core::If { cond, then, else_, .. } => {
             core_uses_decimal(cond) || core_uses_decimal(then) || core_uses_decimal(else_)
         }
@@ -448,6 +472,11 @@ fn collect_tail_callees(
             collect_tail_callees(rhs, false, defn_names, import_names, out);
             collect_tail_callees(body, in_tail, defn_names, import_names, out);
         }
+        // Letrec.body は末尾位置（§8.5 の Let.body と同じ扱い。SPEC 側の未記載は REPORT.md で報告）
+        Core::Letrec { lam, body, .. } => {
+            collect_tail_callees(lam, false, defn_names, import_names, out);
+            collect_tail_callees(body, in_tail, defn_names, import_names, out);
+        }
         Core::If {
             cond,
             then,
@@ -580,6 +609,7 @@ struct Gen<'a> {
     in_async: bool,
     uses_async: bool,
     decimal_used: bool,
+    builtin_ref_used: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -612,6 +642,7 @@ impl<'a> Gen<'a> {
             }
         }
         let uses_async = defs_use_async(&input.defs, &impure_defs);
+        let builtin_ref_used = defs_use_builtin_ref(&input.defs);
         Gen {
             user_names,
             export_names,
@@ -627,6 +658,7 @@ impl<'a> Gen<'a> {
             host_stack: Vec::new(),
             in_async: false,
             uses_async,
+            builtin_ref_used,
             decimal_used: defs_use_decimal(&input.defs),
         }
     }
@@ -686,6 +718,9 @@ impl<'a> Gen<'a> {
         }
         if self.map_used() {
             out += MAP_JS;
+        }
+        if self.builtin_ref_used {
+            out += REF_JS;
         }
         for name in &self.stdlib_used {
             out += &format!("const {} = {};\n", stdlib_js_name(name), self.stdlib_impl(name));
@@ -819,6 +854,11 @@ impl<'a> Gen<'a> {
             "char-alphabetic?" => "(c) => /\\p{Alphabetic}/u.test(c)".to_string(),
             "char-numeric?" => "(c) => /\\p{N}/u.test(c)".to_string(),
             "char-whitespace?" => "(c) => /\\p{White_Space}/u.test(c)".to_string(),
+            // design §3.2: builder は JS では配列 + join。push は新しい配列を返す（不変値）。
+            "builder-empty" => "() => []".to_string(),
+            "builder-push" => "(b, s) => [...b, s]".to_string(),
+            "builder->str" => "(b) => b.join(\"\")".to_string(),
+            "builder-join" => "(arr, sep) => arr.join(sep)".to_string(),
             other => format!(
                 "(() => {{ throw new Error('unsupported stdlib: ' + {other:?}); }})"
             ),
@@ -1174,7 +1214,7 @@ impl<'a> Gen<'a> {
     fn expr(&mut self, e: &Core, ind: &str, w: &mut JsWriter) {
         // async 文脈（defn! 本体やエフェクトを含む lam）では呼び出し結果が Promise になりうるので
         // await で包む（§12.4 の `await host.name(args)` と同じ扱い）。非同期でない値への await は恒等。
-        if self.in_async && matches!(e, Core::App { .. } | Core::EffectCall { .. }) {
+        if self.in_async && matches!(e, Core::App { .. } | Core::EffectCall { .. } | Core::Letrec { .. }) {
             w.write("(await ");
             self.expr_inner(e, ind, w);
             w.write(")");
@@ -1268,6 +1308,50 @@ impl<'a> Gen<'a> {
                     w.write(")");
                 }
             }
+            Core::Letrec {
+                name, lam, body, ..
+            } => {
+                // design §2.1: JS 生成は自己参照できる名前付き関数式で直接書像する。
+                let js = js_name(name);
+                if self.in_async {
+                    w.write("(async () => {\n");
+                } else {
+                    w.write("(() => {\n");
+                }
+                if let Core::Lam {
+                    params,
+                    body: lam_body,
+                    ..
+                } = lam.as_ref()
+                {
+                    let params_js = params
+                        .iter()
+                        .map(|p| js_name(&p.name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let lam_async =
+                        core_has_effect_call(lam_body) || core_calls_impure(lam_body, &self.impure_defs);
+                    let async_kw = if lam_async { "async " } else { "" };
+                    w.write(&format!(
+                        "{ind}  const {js} = {async_kw}function {js}({params_js}) {{\n"
+                    ));
+                    let saved_tail = self.cur_tail.take();
+                    let saved_async = self.in_async;
+                    self.in_async = lam_async;
+                    self.stmt(lam_body, &format!("{ind}    "), w);
+                    self.in_async = saved_async;
+                    self.cur_tail = saved_tail;
+                    w.write(&format!("{ind}  }};\n"));
+                } else {
+                    // check で type-mismatch になるはず。emit 単体では明示エラー。
+                    w.write(&format!(
+                        "{ind}  throw new Error(\"letrec binding must be fn\");\n"
+                    ));
+                }
+                w.write(&format!("{ind}  return "));
+                self.expr(body, &format!("{ind}  "), w);
+                w.write(";\n})()");
+            }
             Core::If {
                 cond,
                 then,
@@ -1330,6 +1414,30 @@ impl<'a> Gen<'a> {
                 }
             }
             Core::EffectCall { effect, args, .. } => {
+                // design §1.5: 組み込み ref エフェクトは host なしで直接書像（§7: { value } オブジェクト）
+                if crate::effects::is_builtin_ref_effect(effect) {
+                    match effect.as_ref() {
+                        "ref" => {
+                            w.write("$ref_new(");
+                            self.expr(&args[0], ind, w);
+                            w.write(")");
+                        }
+                        "ref-get" => {
+                            w.write("(");
+                            self.expr(&args[0], ind, w);
+                            w.write(").value");
+                        }
+                        "ref-set" => {
+                            w.write("((");
+                            self.expr(&args[0], ind, w);
+                            w.write(").value = ");
+                            self.expr(&args[1], ind, w);
+                            w.write(", null)");
+                        }
+                        _ => unreachable!(),
+                    }
+                    return;
+                }
                 if self.in_async {
                     // §12.4: EffectCall -> `await host.name(args)`（host は囲む defn! の第1引数 §12.6）。
                     // 外側の expr ラッパが (await ...) で包む。

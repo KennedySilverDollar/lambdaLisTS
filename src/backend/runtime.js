@@ -12,6 +12,9 @@ function eqVisit(a, b, path) {
   if (typeof a === "bigint" || typeof b === "bigint") return a === b;
   if (a === null || b === null) return a === b;
   if (typeof a !== typeof b) return false;
+  // design/interp-capability.md §1.5: ref は参照等価（Rust 側は Rc::ptr_eq と同一）
+  if (a !== null && typeof a === "object" && a.__lists_ref__ === true) return a === b;
+  if (b !== null && typeof b === "object" && b.__lists_ref__ === true) return a === b;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
     return eqComposite(a, b, path, () => a.every((x, i) => eqVisit(x, b[i], path)));

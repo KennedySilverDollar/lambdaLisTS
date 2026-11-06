@@ -94,3 +94,11 @@ fn char_edge_diff_interp_vs_backend() {
     let backend = backend_from_env();
     assert_diff(&*backend, &["char-edge.lts"], "char-edge.lts");
 }
+
+// design/interp-capability.md §2.1（letrec）/ §1.5（ref）/ §3.2（builder）:
+// 自己再帰・親環境クロージャ・ref の参照等価と共有セル・10^4 builder 畳み込みの差分一致。
+#[test]
+fn letrec_ref_builder_diff_interp_vs_backend() {
+    let backend = backend_from_env();
+    assert_diff(&*backend, &["letrec-ref-builder.lts"], "letrec-ref-builder.lts");
+}

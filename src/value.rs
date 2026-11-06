@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -18,6 +19,8 @@ pub enum Value {
     Obj(BTreeMap<Rc<str>, Value>),
     Map(Rc<PersistentMap>),         // 永続 map（design/interp-capability.md §1.1）
     Set(Rc<PersistentMap>),         // 永続 set（値は Nil。キー集合のみ意味を持つ）
+    Ref(Rc<RefCell<Value>>),        // 可変セル（§1.5）。共有されるので clone でセルを共有する
+    Builder(Rc<Vec<String>>),       // 不変 builder（§3.2）。push は共有時のみ複製（償却 O(1)）
     Ok(Box<Value>),
     Err(Box<Value>),
     Closure(Rc<Closure>),
@@ -97,6 +100,10 @@ pub enum BuiltinKind {
     CharAlphabetic,
     CharNumeric,
     CharWhitespace,
+    BuilderEmpty,
+    BuilderPush,
+    BuilderToStr,
+    BuilderJoin,
     /// モック host のハンドラ（host.rs）。呼び出しを log に記録し、default を返す。
     /// log は実行時の記録なのでシリアライズしない。
     HostMock {
@@ -261,6 +268,9 @@ fn eq_visit(a: &Value, b: &Value, path: &mut Vec<(usize, usize)>) -> Result<bool
             path.pop();
             Ok(ok)
         }
+        // ref は参照等価（§8.3 の関数と同じ扱い。JS 側は $REF タグ付きオブジェクトの a === b）
+        (Value::Ref(x), Value::Ref(y)) => Ok(Rc::ptr_eq(x, y)),
+        (Value::Builder(x), Value::Builder(y)) => Ok(x == y),
         (Value::Ok(x), Value::Ok(y)) => eq_boxed(x, y, a, b, path),
         (Value::Err(x), Value::Err(y)) => eq_boxed(x, y, a, b, path),
         (Value::Dec(x), Value::Dec(y)) => Ok(x == y),
@@ -353,6 +363,9 @@ pub fn print_value(v: &Value) -> String {
             )
         }
         Value::Closure(_) | Value::Builtin(_) => "<fn>".to_string(),
+        Value::Ref(_) => "<ref>".to_string(),
+        // builder は JS 側が配列なので、配列と同じ印字形式で一致させる
+        Value::Builder(parts) => format!("[{}]", parts.join(" ")),
     }
 }
 

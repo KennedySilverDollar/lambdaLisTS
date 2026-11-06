@@ -20,6 +20,7 @@ pub fn occurs(id: usize, t: &Type, subst: &Subst) -> bool {
         Type::Array(el) => occurs(id, el, subst),
         Type::Map(k, v) => occurs(id, k, subst) || occurs(id, v, subst),
         Type::Set(k) => occurs(id, k, subst),
+        Type::Ref(inner) => occurs(id, inner, subst),
         Type::Union(members) => members.iter().any(|m| occurs(id, m, subst)),
         Type::Obj(fields) => fields.values().any(|v| occurs(id, v, subst)),
         Type::ResultT(ok, err) => occurs(id, ok, subst) || occurs(id, err, subst),
@@ -37,6 +38,7 @@ pub fn apply_subst(t: &Type, subst: &Subst) -> Type {
         Type::Array(el) => Type::Array(Box::new(apply_subst(el, subst))),
         Type::Map(k, v) => Type::Map(Box::new(apply_subst(k, subst)), Box::new(apply_subst(v, subst))),
         Type::Set(k) => Type::Set(Box::new(apply_subst(k, subst))),
+        Type::Ref(inner) => Type::Ref(Box::new(apply_subst(inner, subst))),
         Type::Union(members) => Type::Union(members.iter().map(|m| apply_subst(m, subst)).collect()),
         Type::Obj(fields) => Type::Obj(
             fields
@@ -149,6 +151,11 @@ pub fn unify(a0: &Type, b0: &Type, subst: &mut Subst, aliases: &AliasEnv) -> Opt
             unify(x, y, subst, aliases)?;
             Some(a.clone())
         }
+        (Type::Ref(x), Type::Ref(y)) => {
+            unify(x, y, subst, aliases)?;
+            Some(a.clone())
+        }
+        (Type::Builder, Type::Builder) => Some(a.clone()),
         (Type::Obj(fa), Type::Obj(fb)) => {
             for (k, bv) in fb {
                 let av = fa.get(k)?;
