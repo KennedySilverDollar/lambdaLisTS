@@ -508,3 +508,32 @@ SPEC には「decimal は P1」（§8.6/§11/§14）としかないため、本�
 3. bytes にはソース上のリテラル構文が無い（prop の counterexample 印字は print_value 形式）。
 4. read-file! の JS 実行は差分テスト対象外（Node fs）。interp のみ仮想ファイルで決定的にテスト。
 5. $json（decimal時）の Uint8Array 分岐は $mjson のみに追加。decimal と bytes を同時に example 出力する組合せは未対応（実害なし、記録のみ）。
+
+---
+
+## 23. M22 prop の JS バックエンド実行（SPEC.md は未変更）
+
+### 方針（runtime.js の export 3つを崩さない）
+- SPEC §12.5 は runtime.js の export を ok/err/structuralEqual の3つのまま増やさない（MUST）。よって prop 用ランタイムは**別モジュール `src/backend/prop_runtime.js`** とし、prop を含む生成 .js のみが `import { runProps } from "./prop-runtime.js"` し、JsBackend はそのときだけ out_dir に prop-runtime.js を併置する（EmitOutput.uses_prop）。runtime.js は無改変。
+
+### 実装
+- **RNG**: src/rng.rs の splitmix64 を BigInt でビット一致に写像。DEFAULT_SEED=0x5EED1A7C2B219D4F は共通。同じ seed → 同じ列。
+- **codegen**: prop 本体を `$prop_<i>` 関数として出力し `$PROPS` に登録（型ディスクリプタ JSON = alias 展開済み、本体 Core は serde JSON で埋め込み）。末尾に `const $SEED = <seed>n; await runProps($PROPS, $SEED, 100);`。結果は stdout に `prop <i>: ok <json>` / `prop <i>: FAIL <json>`。
+- **生成・縮小**: gen_value/min_value/value_size/shrink_candidates を写像（境界値 NUM_BOUNDARIES・STR_CHARSET・試行100回・深さ6・縮小順序すべて interp と同一。文字列長比較は TextEncoder でバイト長に合わせた）。
+- **結果 JSON のバイト一致**: オブジェクトキーは serde_json と同じくソート（BTreeMap 既定）。数値は ryu 互換に合わせ整数 float に `.0`、NaN/±Inf は null（value_to_json と同じ）。seed は u64 なので BigInt のまま桁落ちなく直列化。id/trials は整数のまま。fix テンプレートは埋め込み core JSON 上で subst_params/print_core を写像（serde 形 Value は平坦化してから value_to_lit）。
+- **--seed**: `lists compile --seed N` を追加し Backend::compile に seed を通し EmitInput.seed → `$SEED` に埋め込む（既定 DEFAULT_SEED）。REPL は既存の --seed / prop リクエスト seed をそのまま使う（継承確認済みテスト）。
+
+### テスト追加
+- `tests/fixtures/props-edge.lts`（pass 3 + fail 1）→ `diff::prop_diff_interp_vs_node_same_seed_byte_identical`: seed=0xDEADBEEF12345678 で interp の prop_result_json と node の `prop i:` 行の JSON が**同一バイト列**（反例 {"x":1.0}・縮小 {"x":0.0}・seed・fix template を含む）、かつ同一 seed の再実行で同一 stdout（決定性）
+- `tools.rs::cli_compile_seed_is_embedded_into_codegen`: --seed 42 で `const $SEED = 42n;` が埋め込まれ prop-runtime.js が配置されること、既定は DEFAULT_SEED
+- fmt fixture に props-edge.lts 追加
+
+### 検証
+- `cargo test` 268 全パス（266 + 2）、warning 0。`LISTS_BACKEND=mock` acceptance 27/27。
+- golden: money.js のみ prop 追加分（import/$prop_0/$SEED/$PROPS/runProps）が変わる意図的変更。それ以外の golden 無改変。compile を2回実行しバイト一致。fmt in-place 冪等。`git diff -- SPEC.md` 空。
+
+### ギャップ・残課題（SPEC には報告のみ）
+1. prop の fix テンプレート（`(example ... => false)`）は埋め込み core JSON 経由の写像。Match/Do 等のフォームは print_core のフォールバック `<expr>` となる（interp と同じ）。
+2. 数値の JSON 形式は ryu/serde_json 互換をテストで担保（整数 float の `.0`、NaN/Inf→null）。指数表記（1e21 系）の ryu と V8 の差は未対応（テスト範囲外）。
+3. prop 本体が defn! を呼ぶ場合（async）は runProps が await で評価する。それ以外の差分はなし。
+4. mock バックエンドは従来通り example のみ実行（prop は REPL/interp と js で実行）。
